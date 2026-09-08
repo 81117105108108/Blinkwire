@@ -63,6 +63,23 @@ const callText = async (name, args) =>
 const results = [];
 const check = (n, ok, d = '') => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? `  — ${d}` : ''}`); };
 
+async function stop(proc) {
+  if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
+  proc.kill();
+  await Promise.race([
+    new Promise((resolve) => proc.once('exit', () => resolve(true))),
+    new Promise((resolve) => setTimeout(() => resolve(false), 5000)),
+  ]);
+}
+
+function cleanDir(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+  } catch {
+    // Best effort: Chrome may briefly retain locks while exiting.
+  }
+}
+
 try {
   await send('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'attach', version: '1' } });
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }) + '\n');
@@ -89,8 +106,9 @@ try {
 } catch (e) {
   check('attach run completed', false, e.message);
 } finally {
-  child.kill();
-  chrome.kill();
+  await stop(child);
+  await stop(chrome);
+  cleanDir(PROFILE);
   if (stderr.trim()) console.log('\n--- stderr ---\n' + stderr.slice(0, 1200));
   const failed = results.filter((r) => !r).length;
   console.log(`\n${results.length - failed}/${results.length} passed`);

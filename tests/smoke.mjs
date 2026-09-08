@@ -15,6 +15,7 @@ const PAGE = `<!doctype html><html><head><title>Blinkwire Fixture</title></head>
   <input id="q" placeholder="Search" />
   <button id="go" onclick="document.getElementById('msg').textContent='clicked ' + document.getElementById('q').value">Go</button>
   <select id="sel"><option value="a">A</option><option value="b">B</option></select>
+  <div id="scroller" style="height:80px;overflow:auto;border:1px solid #000"><div style="height:600px">scroll target content</div></div>
 </main></body></html>`;
 
 const child = spawn(process.execPath, ['dist/index.js', `--port=${PORT}`, '--launch', '--headless', `--user-data-dir=${PROFILE}`], {
@@ -61,6 +62,23 @@ const results = [];
 function check(name, cond, detail = '') {
   results.push({ name, ok: !!cond, detail });
   console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${detail ? `  — ${detail}` : ''}`);
+}
+
+async function stop(proc) {
+  if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
+  proc.kill();
+  await Promise.race([
+    new Promise((resolve) => proc.once('exit', () => resolve(true))),
+    new Promise((resolve) => setTimeout(() => resolve(false), 5000)),
+  ]);
+}
+
+function cleanDir(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+  } catch {
+    // Best effort: Chrome may briefly retain locks while exiting.
+  }
 }
 
 const toolText = (r) => (r?.content ?? []).map((c) => c.text ?? (c.type === 'image' ? '<image>' : '')).join('\n');
@@ -144,6 +162,21 @@ try {
   });
   check('batch rejects recursive self-call', /ERR: Recursive batch execution is forbidden/.test(batchRecurse.text), batchRecurse.text.split('\n')[0]);
 
+  const routePattern = '**/blinkwire-route-isolation-test/**';
+  const routeBaseline = await call('route_list', {});
+  check('route list starts empty', /no active routes/.test(routeBaseline.text), routeBaseline.text.trim());
+  await call('route', { pattern: routePattern, status: 200, body: '{}' });
+  const routeListed = await call('route_list', {});
+  check('route applies to current session', routeListed.text.includes(routePattern), routeListed.text.trim());
+  await call('tabs', { action: 'new', url: 'about:blank' });
+  const routeIsolated = await call('route_list', {});
+  check('routes stay scoped to their session', /no active routes/.test(routeIsolated.text), routeIsolated.text.trim());
+  await call('tabs', { action: 'select', index: 0 });
+  const routeRestored = await call('route_list', {});
+  check('returning to session restores its routes', routeRestored.text.includes(routePattern), routeRestored.text.trim());
+  await call('unroute', {});
+  await call('tabs', { action: 'close', index: 1 });
+
   const filled = await call('fill_form', { fields: [{ target: '#q', value: 'abc' }, { target: '#q', value: 'xyz' }] });
   check('fill_form', /2\/2 filled/.test(filled.text), filled.text.split('\n').pop());
 
@@ -152,6 +185,12 @@ try {
 
   const scroll = await call('scroll', { amount: 50 });
   check('scroll single round-trip', /Scrolled/.test(scroll.text), scroll.text.split('\n')[0]);
+
+  const scrollTarget = await call('scroll', { target: '#scroller', direction: 'down', amount: 50 });
+  check('scroll honors target element', /Scrolled to 0,50/.test(scrollTarget.text), scrollTarget.text.split('\n')[0]);
+
+  const scrollAbsolute = await call('scroll', { target: '#scroller', y: 140 });
+  check('absolute scroll honors target element', /Scrolled to 0,140/.test(scrollAbsolute.text), scrollAbsolute.text.split('\n')[0]);
 
   const shot = await send('tools/call', { name: 'browser_take_screenshot', arguments: { type: 'jpeg', quality: 40 } });
   const img = (shot.content ?? []).find((c) => c.type === 'image');
@@ -168,7 +207,8 @@ try {
 } catch (e) {
   check('smoke run completed without throwing', false, String(e.message));
 } finally {
-  child.kill();
+  await stop(child);
+  cleanDir(PROFILE);
   if (stderr.trim()) console.log('\n--- server stderr ---\n' + stderr.slice(0, 2000));
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} passed`);

@@ -169,11 +169,6 @@ export class CdpConnection {
     });
   }
 
-  /** Underlying socket. Needed to build unscoped views over the same transport. */
-  get socket(): WebSocket {
-    return this.ws;
-  }
-
   on(method: string, cb: Listener, sessionId?: string): () => void {
     let set = this.listeners.get(method);
     if (!set) {

@@ -12,12 +12,12 @@ export class Ring<T extends { seq?: number }> {
   }
 
   /**
-   * Pushes an item. If item.seq is not set, Ring assigns its monotonic sequence number.
-   * Returns the assigned sequence number.
+   * Pushes an item. Ring assigns its monotonic sequence number unless the caller
+   * supplies an explicit nonzero seq. Returns the assigned sequence number.
    */
   push(v: T): number {
     this._seq++;
-    if (v.seq === undefined || v.seq === null) {
+    if (!v.seq) {
       v.seq = this._seq;
     }
     this.buf[this.head] = v;

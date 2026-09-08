@@ -27,7 +27,6 @@ export const SNAPSHOT_FN_SRC = `function(arg){
     if (forId && !LABEL_MAP[forId]) LABEL_MAP[forId] = allLabels[li];
   }
 
-  function cssEsc(s){ return String(s).replace(/["\\\\]/g, '\\\\$&'); }
   function txt(s){ return String(s == null ? '' : s).replace(/\\s+/g, ' ').trim(); }
 
   function visible(el){

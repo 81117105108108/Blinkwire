@@ -103,7 +103,7 @@ Every flag also reads a `BLINKWIRE_*` env var (e.g. `BLINKWIRE_PORT`).
 | `--prefix` | `browser_` | Tool-name prefix |
 | `--debug` | off | Emit timings into `_meta` |
 
-## Tools (55)
+## Tools (56)
 
 Covers the primary Playwright MCP core automation and utility surface, plus a few extras (batch, diff). Playwright code generator (`codegen`) and verification test wrappers are intentionally omitted in favor of lean execution.
 

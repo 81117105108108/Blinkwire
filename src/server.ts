@@ -38,6 +38,20 @@ export async function createServer(cfg: BlinkwireConfig): Promise<{ close(): Pro
   let conn: BrowserConnection | undefined;
   const budgets = new Budget(cfg.maxOutputTokens);
   const refStores = new WeakMap<object, RefStore>();
+  let requestChain: Promise<void> = Promise.resolve();
+
+  /**
+   * MCP transports can deliver tool calls concurrently, while sessions and ref
+   * stores are mutable shared state. Serialize execution per server instance.
+   */
+  async function serializeToolCall<T>(task: () => Promise<T>): Promise<T> {
+    const result = requestChain.then(task, task);
+    requestChain = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
 
   async function getConn(): Promise<BrowserConnection> {
     const o = takeOverride();
@@ -78,6 +92,7 @@ export async function createServer(cfg: BlinkwireConfig): Promise<{ close(): Pro
       const known = allTools.map((t) => cfg.prefix + t.name).join(', ');
       return { content: [{ type: 'text', text: `Unknown tool "${name}". Known tools: ${known}` }], isError: true };
     }
+    return serializeToolCall(async () => {
     try {
       const args = validate(tool.params, req.params?.arguments ?? {});
       const c = await getConn();
@@ -87,6 +102,7 @@ export async function createServer(cfg: BlinkwireConfig): Promise<{ close(): Pro
         refs = new RefStore(session);
         refStores.set(session, refs);
       }
+      const sessionRefs: RefStore = refs;
       const makeRun = (depth: number) => {
         return async (toolNameOrBase: string, rawArgs: Record<string, unknown>): Promise<CallResult> => {
           if (depth > 2) {
@@ -107,7 +123,7 @@ export async function createServer(cfg: BlinkwireConfig): Promise<{ close(): Pro
             conn: c,
             session,
             cfg,
-            refs: refs!,
+            refs: sessionRefs,
             budget: budgets,
             toolName: (b) => cfg.prefix + b,
             run: makeRun(depth + 1),
@@ -138,6 +154,7 @@ export async function createServer(cfg: BlinkwireConfig): Promise<{ close(): Pro
       debug(`${name} failed:`, be.message);
       return { content: toMcpContent(be.toCallResult()), isError: true };
     }
+    });
   });
 
   const transport = new StdioServerTransport();
