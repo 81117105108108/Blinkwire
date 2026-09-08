@@ -1,12 +1,9 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import { pathToFileURL } from 'node:url';
-
 import type { ToolDef } from '../core/types.js';
 import { text } from '../core/types.js';
 import { BlinkwireError } from '../core/errors.js';
 import { settle, waitForText } from '../core/wait.js';
 import { sleep } from '../core/log.js';
+import { saveOutputFile } from '../core/files.js';
 
 function normaliseUrl(raw: string): string {
   const u = raw.trim();
@@ -133,8 +130,5 @@ async function step(ctx: Parameters<ToolDef['handler']>[1], delta: number) {
 }
 
 export async function writeOutput(cfg: { outputDir: string }, filename: string, data: string): Promise<string> {
-  await fs.mkdir(cfg.outputDir, { recursive: true });
-  const file = path.isAbsolute(filename) ? filename : path.join(cfg.outputDir, filename);
-  await fs.writeFile(file, data, 'utf8');
-  return pathToFileURL(file).href;
+  return await saveOutputFile(cfg.outputDir, filename, data, 'utf8');
 }

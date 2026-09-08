@@ -46,6 +46,8 @@ export interface ToolContext {
   budget: Budget;
   /** base name -> prefixed name, e.g. 'snapshot' -> 'browser_snapshot' */
   toolName(base: string): string;
+  /** Run another tool by name (prefixed or base) with recursion/re-entrancy protection */
+  run(nameOrBase: string, rawArgs: Record<string, unknown>): Promise<CallResult>;
 }
 
 export interface ToolDef {

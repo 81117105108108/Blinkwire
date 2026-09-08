@@ -18,7 +18,6 @@ type Listener = (params: any) => void;
 /** A CDP endpoint. `sessionId` scopes the view to one flattened target. */
 export class CdpSession {
   constructor(
-    private readonly ws: WebSocket,
     private readonly owner: CdpConnection,
     readonly sessionId?: string,
   ) {}
@@ -191,7 +190,7 @@ export class CdpConnection {
   session(sessionId: string): CdpSession {
     let s = this.sessions.get(sessionId);
     if (!s) {
-      s = new CdpSession(this.ws, this, sessionId);
+      s = new CdpSession(this, sessionId);
       this.sessions.set(sessionId, s);
     }
     return s;

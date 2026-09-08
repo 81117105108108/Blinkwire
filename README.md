@@ -13,7 +13,7 @@ blinkwire:       attach (0ms) → CDP → 1-4 calls per action → pruned tree
 |---|---|---|
 | Startup | launches a browser (1-3 s) | attaches to yours (0 ms) |
 | Deps | Playwright + browser binaries (~400 MB) | `ws` + MCP SDK |
-| Typing | 4 key events **per character** | **one** `Input.insertText` |
+| Typing | 4 key events **per character** | direct bulk string insertion (`Input.insertText`) |
 | Click | scroll + actionability polling (10-30 CDP calls) | 1 geometry eval + 3 `Input` calls |
 | Scroll | synthetic wheel animation | 1 eval |
 | Waiting | fixed `--timeout-settle` sleep | `MutationObserver` — resolves on the first idle frame |
@@ -99,13 +99,13 @@ Every flag also reads a `BLINKWIRE_*` env var (e.g. `BLINKWIRE_PORT`).
 | `--image-responses` | `allow` | `omit` to suppress inline images |
 | `--network-capture` | off | Enable the Network domain (slower, but needed for `browser_network_requests`) |
 | `--timeout-settle` | `500` | Max ms to wait for the page to settle |
-| `--output-dir` | cwd | Where `filename` arguments are written |
+| `--output-dir` | temp dir | Where `filename` arguments are written |
 | `--prefix` | `browser_` | Tool-name prefix |
 | `--debug` | off | Emit timings into `_meta` |
 
 ## Tools (55)
 
-Same surface as Playwright MCP, plus a few extras.
+Covers the primary Playwright MCP core automation and utility surface, plus a few extras (batch, diff). Playwright code generator (`codegen`) and verification test wrappers are intentionally omitted in favor of lean execution.
 
 **Navigation** `browser_navigate` `browser_navigate_back` `browser_navigate_forward` `browser_reload` `browser_wait_for`
 

@@ -5,7 +5,7 @@ import { text } from '../core/types.js';
 import { BlinkwireError } from '../core/errors.js';
 import { takeSnapshot } from '../core/snapshot.js';
 import { diffText } from '../core/diff.js';
-import { writeOutput } from './navigation.js';
+import { saveOutputFile } from '../core/files.js';
 
 const last = new WeakMap<PageSession, SnapshotResult>();
 
@@ -47,7 +47,7 @@ export const tools: ToolDef[] = [
       last.set(ctx.session, result);
 
       if (args.filename) {
-        const uri = await writeOutput(ctx.cfg, args.filename as string, result.text);
+        const uri = await saveOutputFile(ctx.cfg.outputDir, args.filename as string, result.text, 'utf8');
         return { kind: 'resource', uri, mime: 'text/plain', text: `Saved snapshot (${result.stats.nodes} nodes) to ${uri}` };
       }
 

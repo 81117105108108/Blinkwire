@@ -141,8 +141,17 @@ interface Route {
   headers?: string[];
 }
 
-const routes = new Map<string, Route>();
+const sessionRoutes = new WeakMap<PageSession, Map<string, Route>>();
 const wired = new WeakMap<PageSession, boolean>();
+
+function getSessionRoutes(session: PageSession): Map<string, Route> {
+  let m = sessionRoutes.get(session);
+  if (!m) {
+    m = new Map<string, Route>();
+    sessionRoutes.set(session, m);
+  }
+  return m;
+}
 
 function globToRegExp(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
@@ -161,11 +170,13 @@ function parseHeaders(list: string[] | undefined): Array<{ name: string; value: 
 function wireFetch(ctx: Ctx): void {
   if (wired.get(ctx.session)) return;
   wired.set(ctx.session, true);
+  const session = ctx.session;
   ctx.session.cdp.on('Fetch.requestPaused', (p: any) => {
     const url = String(p?.request?.url ?? '');
     const id = String(p?.requestId ?? '');
     void (async () => {
       try {
+        const routes = getSessionRoutes(session);
         let hit: Route | undefined;
         for (const r of routes.values()) {
           if (globToRegExp(r.pattern).test(url)) {
@@ -311,6 +322,7 @@ export const tools: ToolDef[] = [
       const pattern = a.pattern as string;
       await ctx.session.ensure('Fetch');
       wireFetch(ctx);
+      const routes = getSessionRoutes(ctx.session);
       routes.set(pattern, {
         pattern,
         status: (a.status as number | undefined) ?? 200,
@@ -327,7 +339,8 @@ export const tools: ToolDef[] = [
     title: 'List network routes',
     description: 'Show the active mocked routes.',
     readOnly: true,
-    async handler(): Promise<CallResult> {
+    async handler(_a, ctx): Promise<CallResult> {
+      const routes = getSessionRoutes(ctx.session);
       if (routes.size === 0) return text('(no active routes)');
       return text([...routes.values()].map((r) => `${r.pattern} -> ${r.status} ${r.contentType ?? ''}`).join('\n'));
     },
@@ -338,6 +351,7 @@ export const tools: ToolDef[] = [
     description: 'Remove one mocked route, or all of them when no pattern is given.',
     params: { pattern: { type: 'string', description: 'Pattern to remove (omit to remove all)' } },
     async handler(a, ctx): Promise<CallResult> {
+      const routes = getSessionRoutes(ctx.session);
       if (a.pattern) routes.delete(a.pattern as string);
       else routes.clear();
       if (routes.size === 0) {

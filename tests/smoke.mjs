@@ -139,6 +139,11 @@ try {
   check('batch runs 3 steps in one call', /3\/3 ok/.test(batch.text), batch.text.split('\n').filter((l) => l.startsWith('—'))[0]);
   check('batch inlines requested output', /2/.test(batch.text));
 
+  const batchRecurse = await call('batch', {
+    steps: [{ tool: 'batch', args: { steps: [{ tool: 'evaluate', args: { function: '() => 1' } }] } }],
+  });
+  check('batch rejects recursive self-call', /ERR: Recursive batch execution is forbidden/.test(batchRecurse.text), batchRecurse.text.split('\n')[0]);
+
   const filled = await call('fill_form', { fields: [{ target: '#q', value: 'abc' }, { target: '#q', value: 'xyz' }] });
   check('fill_form', /2\/2 filled/.test(filled.text), filled.text.split('\n').pop());
 

@@ -46,8 +46,17 @@ export async function screenshot(session: PageSession, opts: ShotOpts = {}): Pro
     metrics = undefined;
   }
   const cssViewport = metrics?.cssVisualViewport ?? metrics?.cssLayoutViewport;
-  const width = clip ? Math.round(clip.width) : Math.round(cssViewport?.clientWidth ?? 1280);
-  const height = clip ? Math.round(clip.height) : Math.round(cssViewport?.clientHeight ?? 720);
+  const contentSize = metrics?.cssContentSize;
+  const width = clip
+    ? Math.round(clip.width)
+    : opts.fullPage === true && contentSize?.width
+      ? Math.round(contentSize.width)
+      : Math.round(cssViewport?.clientWidth ?? 1280);
+  const height = clip
+    ? Math.round(clip.height)
+    : opts.fullPage === true && contentSize?.height
+      ? Math.round(contentSize.height)
+      : Math.round(cssViewport?.clientHeight ?? 720);
 
   // maxWidth is honoured by rendering at a reduced device scale factor — no image
   // library needed, and it shrinks the payload before it ever reaches the model.
@@ -55,10 +64,8 @@ export async function screenshot(session: PageSession, opts: ShotOpts = {}): Pro
 
   const ladder: Array<{ quality?: number; dsf: number }> = [
     { quality, dsf: widthDsf },
-    { quality: 60, dsf: widthDsf },
-    { quality: 40, dsf: widthDsf },
-    { quality: 40, dsf: Math.min(widthDsf, 0.6) },
-    { quality: 30, dsf: Math.min(widthDsf, 0.4) },
+    { quality: 50, dsf: Math.min(widthDsf, 0.75) },
+    { quality: 35, dsf: Math.min(widthDsf, 0.5) },
   ];
 
   let last: Shot | undefined;

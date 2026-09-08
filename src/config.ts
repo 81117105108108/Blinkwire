@@ -1,5 +1,7 @@
 export type SnapshotMode = 'interactive' | 'full' | 'minimal';
 export type ConsoleLevel = 'error' | 'warning' | 'info' | 'debug';
+import os from 'node:os';
+import path from 'node:path';
 
 export interface BlinkwireConfig {
   prefix: string;
@@ -40,7 +42,7 @@ export const DEFAULT_CONFIG: BlinkwireConfig = {
   maxOutputTokens: 6000,
   consoleLevel: 'info',
   imageResponses: 'allow',
-  outputDir: '',
+  outputDir: path.join(os.tmpdir(), 'blinkwire-output'),
   timeoutAction: 5000,
   timeoutNavigation: 30000,
   timeoutSettle: 500,
@@ -65,7 +67,7 @@ export function httpBase(cfg: BlinkwireConfig): string {
 
 export function parseConfig(argv: string[]): BlinkwireConfig {
   const cfg: BlinkwireConfig = { ...DEFAULT_CONFIG };
-  cfg.outputDir = env('BLINKWIRE_OUTPUT_DIR') ?? process.cwd();
+  cfg.outputDir = env('BLINKWIRE_OUTPUT_DIR') ?? path.join(os.tmpdir(), 'blinkwire-output');
 
   const e = (k: string) => env(`BLINKWIRE_${k}`);
   if (e('PREFIX')) cfg.prefix = e('PREFIX')!;

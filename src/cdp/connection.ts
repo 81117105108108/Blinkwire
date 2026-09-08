@@ -70,6 +70,7 @@ export class BrowserConnection {
   private readonly attached = new Map<string, PageSession>();
   private child: ChildProcess | undefined;
   private spawned = false;
+  private tempProfileDir: string | undefined;
   private versionInfo: VersionInfo = { Browser: 'unknown' };
 
   private constructor(readonly cfg: ConnectOptions) {}
@@ -97,7 +98,7 @@ export class BrowserConnection {
 
     if (version.webSocketDebuggerUrl) {
       this.conn = await CdpConnection.connect(version.webSocketDebuggerUrl, this.cfg.timeoutNavigation);
-      this._browser = new CdpSession(this.conn.socket, this.conn);
+      this._browser = new CdpSession(this.conn);
     }
 
     const target = await this.pickInitialTarget();
@@ -107,7 +108,7 @@ export class BrowserConnection {
       await this.attach(target.id);
     } else if (target.webSocketDebuggerUrl) {
       this.conn = await CdpConnection.connect(target.webSocketDebuggerUrl, this.cfg.timeoutNavigation);
-      const s = new CdpSession(this.conn.socket, this.conn);
+      const s = new CdpSession(this.conn);
       this._current = new PageSession(this, target.id, s);
       this.attached.set(target.id, this._current);
     } else {
@@ -138,8 +139,11 @@ export class BrowserConnection {
 
   private async launch(): Promise<void> {
     const exe = findExecutable(this.cfg.executablePath);
-    const dir =
-      this.cfg.userDataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'blinkwire-profile-'));
+    let dir = this.cfg.userDataDir;
+    if (!dir) {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blinkwire-profile-'));
+      this.tempProfileDir = dir;
+    }
     const args = [
       `--remote-debugging-port=${this.cfg.port}`,
       `--user-data-dir=${dir}`,
@@ -250,7 +254,7 @@ export class BrowserConnection {
       const t = list.find((x) => x.id === targetId);
       if (!t?.webSocketDebuggerUrl) throw new BlinkwireError(`Cannot attach to ${targetId}.`, 'no_target');
       const direct = await CdpConnection.connect(t.webSocketDebuggerUrl, this.cfg.timeoutNavigation);
-      s = new CdpSession(direct.socket, direct);
+      s = new CdpSession(direct);
     }
     const ps = new PageSession(this, targetId, s);
     this.attached.set(targetId, ps);
@@ -324,6 +328,14 @@ export class BrowserConnection {
       } catch {
         /* ignore */
       }
+    }
+    if (this.tempProfileDir) {
+      try {
+        fs.rmSync(this.tempProfileDir, { recursive: true, force: true, maxRetries: 3 });
+      } catch {
+        /* ignore locks or background cleanup delays */
+      }
+      this.tempProfileDir = undefined;
     }
   }
 }

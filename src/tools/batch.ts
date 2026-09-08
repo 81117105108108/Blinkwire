@@ -1,21 +1,7 @@
 import type { ToolDef, CallResult } from '../core/types.js';
 import { text } from '../core/types.js';
 import { settle } from '../core/wait.js';
-import { validate } from '../core/schema.js';
-
-/** Resolved lazily: tools/index.js imports batch.js, so touching it at module-eval would deadlock. */
-let registry: Map<string, ToolDef> | undefined;
-async function toolRegistry(): Promise<Map<string, ToolDef>> {
-  if (!registry) {
-    const { allTools } = await import('./index.js');
-    registry = new Map<string, ToolDef>();
-    for (const t of allTools) {
-      registry.set(t.name, t);
-      registry.set(`browser_${t.name}`, t);
-    }
-  }
-  return registry;
-}
+import { BlinkwireError } from '../core/errors.js';
 
 /**
  * batch runs N tools inside ONE MCP round-trip. This is Blinkwire's single
@@ -27,7 +13,7 @@ export const tools: ToolDef[] = [
     title: 'Run several actions at once',
     description:
       'Run several Blinkwire actions in ONE call. This is the biggest latency and context win available: you pay one round-trip instead of N. ' +
-      'Each step is {tool, args}. Tool names may be bare ("click") or prefixed ("browser_click"). ' +
+      'Each step is {tool, args}. Tool names may be bare ("click") or prefixed (e.g. with your server prefix). ' +
       'By default only failures (and the last step) have their full output inlined — use `include` to see more.',
     params: {
       steps: {
@@ -41,10 +27,11 @@ export const tools: ToolDef[] = [
     },
     async handler(args, ctx): Promise<CallResult> {
       const steps = (args.steps as Array<Record<string, unknown>>) ?? [];
-      if (steps.length === 0) throw new Error('Provide at least one step.');
+      if (steps.length === 0) {
+        throw new BlinkwireError('Provide at least one step in steps array.', 'bad_arguments', 'Pass e.g. steps: [{ tool: "click", args: { target: "e1" } }]');
+      }
       const stopOnError = args.stopOnError !== false;
       const include = new Set((args.include as number[] | undefined) ?? []);
-      const byName = await toolRegistry();
 
       const t0 = Date.now();
       const lines: string[] = [];
@@ -54,22 +41,16 @@ export const tools: ToolDef[] = [
 
       for (let i = 0; i < steps.length; i++) {
         const step = steps[i]!;
-        const label = `${i + 1}. ${String(step.tool ?? '?')}`;
+        const toolName = String(step.tool ?? '?');
+        const label = `${i + 1}. ${toolName}`;
         if (aborted) {
           lines.push(`${label} skipped`);
           continue;
         }
-        const tool = byName.get(String(step.tool ?? ''));
-        if (!tool) {
-          failed++;
-          lines.push(`${label} ERR: unknown tool "${String(step.tool ?? '')}"`);
-          if (stopOnError) aborted = true;
-          continue;
-        }
+
         const s0 = Date.now();
         try {
-          const parsed = validate(tool.params, step.args ?? {});
-          const r = await tool.handler(parsed, ctx);
+          const r = await ctx.run(toolName, (step.args as Record<string, unknown>) ?? {});
           const ms = Date.now() - s0;
           ok++;
           lines.push(`${label} ok ${ms}ms`);

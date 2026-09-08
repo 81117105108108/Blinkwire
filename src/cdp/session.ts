@@ -131,7 +131,7 @@ export class PageSession {
     const nav = () => this.buffers.navSeq;
     this.cdp.on('Runtime.consoleAPICalled', (p: any) => {
       this.buffers.console.push({
-        seq: this.buffers.console.seq + 1,
+        seq: 0,
         ts: Date.now(),
         nav: nav(),
         level: levelOf(p?.type ?? 'log'),
@@ -143,7 +143,7 @@ export class PageSession {
     this.cdp.on('Runtime.exceptionThrown', (p: any) => {
       const d = p?.exceptionDetails;
       this.buffers.console.push({
-        seq: this.buffers.console.seq + 1,
+        seq: 0,
         ts: Date.now(),
         nav: nav(),
         level: 'error',
@@ -157,7 +157,7 @@ export class PageSession {
       if (!e) return;
       if (e.source === 'network') return; // duplicated by the Network domain
       this.buffers.console.push({
-        seq: this.buffers.console.seq + 1,
+        seq: 0,
         ts: Date.now(),
         nav: nav(),
         level: levelOf(e.level ?? 'info'),
@@ -186,7 +186,7 @@ export class PageSession {
 
     this.cdp.on('Network.requestWillBeSent', (p: any) => {
       const e: NetworkEntry = {
-        seq: this.buffers.network.seq + 1,
+        seq: 0,
         ts: Date.now(),
         requestId: p.requestId,
         method: p.request?.method ?? 'GET',

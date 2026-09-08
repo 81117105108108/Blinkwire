@@ -97,7 +97,7 @@ export const tools: ToolDef[] = [
     name: 'type',
     title: 'Type text',
     description:
-      'Type text into an editable element. By default this is ONE CDP call (Input.insertText) — use slowly:true only when the page needs real per-key events.',
+      'Type text into an editable element. Fast path focuses and inputs text in bulk (Input.insertText) without per-character key events — use slowly:true only when the page needs real per-key events.',
     params: {
       target: { type: 'string', description: 'Element ref (e.g. e4) or CSS selector', required: true },
       text: { type: 'string', description: 'Text to type', required: true },

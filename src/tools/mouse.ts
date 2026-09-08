@@ -121,27 +121,27 @@ export const tools: ToolDef[] = [
       const absX = args.x as number | undefined;
       const absY = args.y as number | undefined;
 
-      let expr: string;
-      if (typeof absX === 'number' || typeof absY === 'number') {
-        expr = `(function(a){ var t = a.el || document.scrollingElement || document.documentElement;
-          if (t === document.scrollingElement || t === document.documentElement || t === document.body) { window.scrollTo(a.x, a.y); }
-          else { if (typeof a.x === 'number') t.scrollLeft = a.x; if (typeof a.y === 'number') t.scrollTop = a.y; }
-          return window.__bw.scroll(t, 0, 0); })`;
-      } else {
-        expr = `(function(a){ return window.__bw.scroll(a.el, a.dx, a.dy); })`;
-      }
-
       let elExpr = 'null';
       const id = ctx.refs.check((args.target as string | undefined) ?? '');
       if (id) elExpr = `window.__bw.els[${JSON.stringify(id)}]`;
       else if (args.target) elExpr = `document.querySelector(${JSON.stringify(args.target)})`;
 
+      let expr: string;
+      if (typeof absX === 'number' || typeof absY === 'number') {
+        expr = `(function(el, a){ var t = el || document.scrollingElement || document.documentElement;
+          if (t === document.scrollingElement || t === document.documentElement || t === document.body) { window.scrollTo(a.x != null ? a.x : window.scrollX, a.y != null ? a.y : window.scrollY); }
+          else { if (typeof a.x === 'number') t.scrollLeft = a.x; if (typeof a.y === 'number') t.scrollTop = a.y; }
+          return window.__bw.scroll(t, 0, 0); })`;
+      } else {
+        expr = `(function(el, a){ return window.__bw.scroll(el, a.dx, a.dy); })`;
+      }
+
       const dx = dir === 'left' ? -amount : dir === 'right' ? amount : 0;
       const dy = dir === 'up' ? -amount : dir === 'down' ? amount : 0;
 
       const r = await ctx.session.eval<{ x: number; y: number; atEnd: boolean; atTop: boolean }>(
-        `(function(a){ var el = ${elExpr}; return (${expr})(a); })`,
-        { el: null, dx, dy, x: absX ?? null, y: absY ?? null },
+        `(function(a){ var el = ${elExpr}; return (${expr})(el, a); })`,
+        { dx, dy, x: absX ?? null, y: absY ?? null },
         { awaitPromise: false },
       );
       if (!r) throw new BlinkwireError('Scroll failed — the target may not exist.', 'no_element');

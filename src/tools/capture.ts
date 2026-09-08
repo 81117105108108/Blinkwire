@@ -1,23 +1,13 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import { pathToFileURL } from 'node:url';
-
 import type { ToolDef, CallResult } from '../core/types.js';
 import type { ConsoleEntry, NetworkEntry } from '../cdp/session.js';
 import { STATIC_TYPES } from '../cdp/session.js';
 import { text } from '../core/types.js';
 import { BlinkwireError } from '../core/errors.js';
 import { screenshot } from '../core/image.js';
+import { saveOutputFile } from '../core/files.js';
 
 const MIME: Record<string, string> = { png: 'image/png', jpeg: 'image/jpeg', webp: 'image/webp' };
 const LEVEL_RANK: Record<string, number> = { error: 0, warning: 1, info: 2, debug: 3 };
-
-async function save(outputDir: string, filename: string, buf: Buffer): Promise<string> {
-  await fs.mkdir(outputDir, { recursive: true });
-  const file = path.isAbsolute(filename) ? filename : path.join(outputDir, filename);
-  await fs.writeFile(file, buf);
-  return pathToFileURL(file).href;
-}
 
 function filteredNetwork(all: readonly NetworkEntry[], includeStatic: boolean, filter?: string): NetworkEntry[] {
   let rx: RegExp | undefined;
@@ -65,7 +55,7 @@ export const tools: ToolDef[] = [
       const info = `${shot.width}x${shot.height}, ${shot.bytes} bytes`;
 
       if (args.filename) {
-        const uri = await save(ctx.cfg.outputDir, args.filename as string, Buffer.from(shot.data, 'base64'));
+        const uri = await saveOutputFile(ctx.cfg.outputDir, args.filename as string, Buffer.from(shot.data, 'base64'));
         return { kind: 'resource', uri, mime: shot.mime, text: `Saved ${info} to ${uri}` };
       }
       if (ctx.cfg.imageResponses === 'omit') {
@@ -95,7 +85,7 @@ export const tools: ToolDef[] = [
         scale: (args.scale as number | undefined) ?? 1,
         ...(args.format ? { paperFormat: args.format } : {}),
       });
-      const uri = await save(ctx.cfg.outputDir, (args.filename as string) ?? 'page.pdf', Buffer.from(r.data, 'base64'));
+      const uri = await saveOutputFile(ctx.cfg.outputDir, (args.filename as string) ?? 'page.pdf', Buffer.from(r.data, 'base64'));
       return { kind: 'resource', uri, mime: 'application/pdf', text: `Saved PDF to ${uri}` };
     },
   },
@@ -228,7 +218,7 @@ export const tools: ToolDef[] = [
       }
       if (out.length > 20_000) out = `${out.slice(0, 20_000)}\n… [truncated]`;
       if (args.filename) {
-        const uri = await save(ctx.cfg.outputDir, args.filename as string, Buffer.from(out, 'utf8'));
+        const uri = await saveOutputFile(ctx.cfg.outputDir, args.filename as string, out, 'utf8');
         return { kind: 'resource', uri, mime: 'application/json', text: `Saved result to ${uri}` };
       }
       return text(ctx.budget.clamp(out));

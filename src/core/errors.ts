@@ -50,7 +50,9 @@ export function fail(message: string, code?: string, hint?: string): never {
 export function asBlinkwireError(e: unknown): BlinkwireError {
   if (e instanceof BlinkwireError) return e;
   if (e instanceof Error) {
-    if (/timeout/i.test(e.message)) return new TimeoutError(e.message);
+    if (e.name === 'TimeoutError' || (e as { code?: string }).code === 'timeout' || e.name === 'AbortError') {
+      return new TimeoutError(e.message);
+    }
     return new BlinkwireError(e.message);
   }
   return new BlinkwireError(String(e));

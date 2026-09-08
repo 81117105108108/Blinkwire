@@ -9,7 +9,7 @@ export const SNAPSHOT_FN_SRC = `function(arg){
   var depthLimit = arg.depth > 0 ? arg.depth : 1000;
   var boxes = !!arg.boxes;
   var maxNodes = arg.maxNodes || 1200;
-  var SKIP = { SCRIPT:1, STYLE:1, NOSCRIPT:1, TEMPLATE:1, HEAD:1, META:1, LINK:1, TITLE:1, BASE:1, SVG:0 };
+  var SKIP = { SCRIPT:1, STYLE:1, NOSCRIPT:1, TEMPLATE:1, HEAD:1, META:1, LINK:1, TITLE:1, BASE:1, svg:1, SVG:1 };
   var LANDMARK = { navigation:1, main:1, banner:1, contentinfo:1, complementary:1, form:1, search:1, region:1 };
   var ROLE_RE = /^(button|link|tab|menuitem|checkbox|radio|switch|combobox|textbox|option|menuitemcheckbox|menuitemradio|searchbox|slider|spinbutton|img)$/;
 
@@ -19,11 +19,24 @@ export const SNAPSHOT_FN_SRC = `function(arg){
   var root = arg.selector ? document.querySelector(arg.selector) : document.body;
   if (!root) return { lines: [], refs: [], url: location.href, title: document.title, truncated: false, total: 0 };
 
+  // Pre-index label[for] once to turn O(n^2) nameOf lookups into O(1)
+  var LABEL_MAP = {};
+  var allLabels = document.querySelectorAll('label[for]');
+  for (var li = 0; li < allLabels.length; li++) {
+    var forId = allLabels[li].getAttribute('for');
+    if (forId && !LABEL_MAP[forId]) LABEL_MAP[forId] = allLabels[li];
+  }
+
   function cssEsc(s){ return String(s).replace(/["\\\\]/g, '\\\\$&'); }
   function txt(s){ return String(s == null ? '' : s).replace(/\\s+/g, ' ').trim(); }
 
   function visible(el){
     if (el.hasAttribute('hidden')) return false;
+    // Fast path: if offsetParent is null and element is not fixed/sticky, it is not displayed
+    if (el.offsetParent === null && el !== document.body && el !== document.documentElement) {
+      var pos = getComputedStyle(el).position;
+      if (pos !== 'fixed' && pos !== 'sticky') return false;
+    }
     if (el.getClientRects().length === 0) return false;
     var cs = getComputedStyle(el);
     if (cs.visibility === 'hidden') return false;
@@ -95,9 +108,9 @@ export const SNAPSHOT_FN_SRC = `function(arg){
     if (ph) return txt(ph).slice(0, 160);
     var t = el.tagName;
     if (t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA') {
-      if (el.id) {
-        var l = document.querySelector('label[for="' + cssEsc(el.id) + '"]');
-        if (l) return txt(l.innerText || l.textContent).slice(0, 160);
+      if (el.id && LABEL_MAP[el.id]) {
+        var l = LABEL_MAP[el.id];
+        return txt(l.innerText || l.textContent).slice(0, 160);
       }
       var p = el.closest ? el.closest('label') : null;
       if (p) return txt(p.innerText || p.textContent).slice(0, 160);

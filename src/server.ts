@@ -10,7 +10,7 @@ import { BrowserConnection } from './cdp/connection.js';
 import { RefStore } from './core/refs.js';
 import { Budget } from './core/budget.js';
 import { validate, toJsonSchema } from './core/schema.js';
-import { asBlinkwireError } from './core/errors.js';
+import { BlinkwireError, asBlinkwireError } from './core/errors.js';
 import { debug } from './core/log.js';
 
 const INSTRUCTIONS = [
@@ -87,6 +87,35 @@ export async function createServer(cfg: BlinkwireConfig): Promise<{ close(): Pro
         refs = new RefStore(session);
         refStores.set(session, refs);
       }
+      const makeRun = (depth: number) => {
+        return async (toolNameOrBase: string, rawArgs: Record<string, unknown>): Promise<CallResult> => {
+          if (depth > 2) {
+            throw new BlinkwireError('Maximum nested tool execution depth exceeded', 'max_depth_exceeded');
+          }
+          const baseTarget = toolNameOrBase.startsWith(cfg.prefix)
+            ? toolNameOrBase.slice(cfg.prefix.length)
+            : toolNameOrBase;
+          if (baseTarget === 'batch') {
+            throw new BlinkwireError('Recursive batch execution is forbidden', 'bad_batch_recursion');
+          }
+          const targetTool = toolMap.get(baseTarget);
+          if (!targetTool) {
+            throw new BlinkwireError(`Unknown tool "${toolNameOrBase}"`, 'unknown_tool');
+          }
+          const parsed = validate(targetTool.params, rawArgs ?? {});
+          const nestedCtx: ToolContext = {
+            conn: c,
+            session,
+            cfg,
+            refs: refs!,
+            budget: budgets,
+            toolName: (b) => cfg.prefix + b,
+            run: makeRun(depth + 1),
+          };
+          return await targetTool.handler(parsed, nestedCtx);
+        };
+      };
+
       const ctx: ToolContext = {
         conn: c,
         session,
@@ -94,6 +123,7 @@ export async function createServer(cfg: BlinkwireConfig): Promise<{ close(): Pro
         refs,
         budget: budgets,
         toolName: (b) => cfg.prefix + b,
+        run: makeRun(1),
       };
       const r = await tool.handler(args, ctx);
       const ms = Date.now() - t0;
