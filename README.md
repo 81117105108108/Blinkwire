@@ -59,7 +59,7 @@ Tool names are prefixed `browser_` by default, so Blinkwire is a literal drop-in
   "mcp": {
     "blinkwire": {
       "type": "local",
-      "command": ["node", "C:/Users/Bubba/Projects/blinkwire/dist/index.js"],
+      "command": ["node", "C:/Users/You/Projects/blinkwire/dist/index.js"],
       "enabled": true
     }
   }
@@ -73,7 +73,7 @@ Tool names are prefixed `browser_` by default, so Blinkwire is a literal drop-in
   "mcpServers": {
     "blinkwire": {
       "command": "node",
-      "args": ["C:/Users/Bubba/Projects/blinkwire/dist/index.js"]
+      "args": ["C:/Users/You/Projects/blinkwire/dist/index.js"]
     }
   }
 }
