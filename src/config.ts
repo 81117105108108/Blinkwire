@@ -9,8 +9,13 @@ export interface BlinkwireConfig {
   host: string;
   port: number;
   cdpEndpoint?: string;
+  /**
+   * Start a managed Chrome when no debuggable browser is found.
+   * Defaults to false: Blinkwire attaches to YOUR running Chrome and never
+   * creates a new one unless you explicitly opt in with --launch.
+   */
   launch: boolean;
-  /** Launch a managed Chrome only when no debug-enabled browser was found. */
+  /** Programmatic/env alias for launch. Also false by default. */
   autoLaunch: boolean;
   executablePath?: string;
   userDataDir?: string;
@@ -41,7 +46,7 @@ export const DEFAULT_CONFIG: BlinkwireConfig = {
   host: '127.0.0.1',
   port: 9222,
   launch: false,
-  autoLaunch: true,
+  autoLaunch: false,
   headless: false,
   snapshotMode: 'interactive',
   snapshotBoxes: false,
@@ -84,8 +89,13 @@ export function parseConfig(argv: string[]): BlinkwireConfig {
   if (e('EXECUTABLE_PATH')) cfg.executablePath = e('EXECUTABLE_PATH');
   if (e('USER_DATA_DIR')) cfg.userDataDir = e('USER_DATA_DIR');
   if (e('HEADLESS')) cfg.headless = e('HEADLESS') !== '0' && e('HEADLESS') !== 'false';
-  if (e('LAUNCH')) cfg.launch = e('LAUNCH') === '1' || e('LAUNCH') === 'true';
-  if (e('AUTO_LAUNCH')) cfg.autoLaunch = e('AUTO_LAUNCH') === '1' || e('AUTO_LAUNCH') === 'true';
+  const onOff = (v: string | undefined): boolean | undefined =>
+    v === undefined ? undefined : v === '1' || v.toLowerCase() === 'true';
+  const launchEnv = onOff(e('LAUNCH')) ?? onOff(e('AUTO_LAUNCH'));
+  if (launchEnv !== undefined) {
+    cfg.launch = launchEnv;
+    cfg.autoLaunch = launchEnv;
+  }
   if (e('TIMEOUT_TOOL')) cfg.timeoutTool = Number(e('TIMEOUT_TOOL')) || cfg.timeoutTool;
   if (e('SNAPSHOT_MODE')) cfg.snapshotMode = e('SNAPSHOT_MODE') as SnapshotMode;
   if (e('MAX_OUTPUT_TOKENS')) cfg.maxOutputTokens = Number(e('MAX_OUTPUT_TOKENS')) || cfg.maxOutputTokens;
@@ -123,8 +133,16 @@ export function parseConfig(argv: string[]): BlinkwireConfig {
       case 'executable-path': cfg.executablePath = next(); break;
       case 'user-data-dir': cfg.userDataDir = next(); break;
       case 'headless': case 'no-headless': cfg.headless = bool() && key === 'headless'; break;
-      case 'launch': case 'no-launch': cfg.launch = key === 'launch'; break;
-      case 'auto-launch': case 'no-auto-launch': cfg.autoLaunch = key === 'auto-launch'; break;
+      case 'launch':
+      case 'auto-launch':
+        cfg.launch = true;
+        cfg.autoLaunch = true;
+        break;
+      case 'no-launch':
+      case 'no-auto-launch':
+        cfg.launch = false;
+        cfg.autoLaunch = false;
+        break;
       case 'match-url': cfg.match = { ...cfg.match, url: next() }; break;
       case 'match-title': cfg.match = { ...cfg.match, title: next() }; break;
       case 'match-index': cfg.match = { ...cfg.match, index: Number(next()) }; break;

@@ -26,11 +26,13 @@ interface VersionInfo {
 }
 
 const HINT =
-  'Blinkwire could not find a Chrome with DevTools enabled. It always tries to attach first and only ' +
-  'starts a managed browser as a last resort.\n' +
-  'Do NOT start a browser yourself — call browser_connect instead (it auto-discovers), ' +
-  'or run blinkwire with --launch [--headless]. If your own Chrome is running but invisible to tools, ' +
-  'ask the user to restart it with --remote-debugging-port=9222 — Chrome only reads that flag at startup.';
+  'Blinkwire could not find a Chrome with DevTools enabled. It attaches to the user\'s running Chrome ' +
+  'and never starts one of its own unless blinkwire was run with --launch.\n' +
+  'Do NOT start a browser yourself — call browser_connect instead (it auto-discovers).\n' +
+  'If the user\'s own Chrome is running but invisible to tools, tell the user this exact fix: ' +
+  'fully quit Chrome first (a lingering background process can hold the port without serving DevTools), ' +
+  'then restart it once with --remote-debugging-port=9222. Chrome only reads that flag at startup, ' +
+  'so nothing else — no relaunch, no new tab, no extension — can expose an already-running session.';
 
 function findExecutable(explicit?: string): string {
   if (explicit) return explicit;
@@ -124,7 +126,11 @@ export class BrowserConnection {
       if (version) {
         found = { endpoint: `http://${host}:${port}`, port, source: 'blinkwire-managed', version };
         debug(`no debuggable Chrome found — started a managed one on :${port}`);
-        warn(`No Chrome with DevTools was found, so Blinkwire started a managed one on :${port}.`);
+        warn(
+          `No Chrome with DevTools was found, so --launch started a managed one on :${port}. ` +
+            `This is a separate browser, not your session. To use your own tabs, quit Chrome fully and ` +
+            `restart it once with --remote-debugging-port=9222, then reconnect without --launch.`,
+        );
       }
     }
 

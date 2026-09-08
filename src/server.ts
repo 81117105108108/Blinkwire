@@ -16,8 +16,9 @@ import { debug } from './core/log.js';
 const INSTRUCTIONS = [
   'Blinkwire — fast CDP browser control. It attaches to a Chrome the user already runs.',
   'RULE 1: never start a browser yourself. No shell commands, no playwright, no new Chrome.',
-  'If a call reports no browser, use browser_connect — it auto-discovers — or let the',
-  'server start a managed one on its own. Your job is the page, not the process.',
+  'If a call reports no browser, use browser_connect — it auto-discovers the user\'s running Chrome.',
+  'A managed browser exists only if the server was started with --launch; otherwise ask the user',
+  'to restart their Chrome with --remote-debugging-port=9222. Your job is the page, not the process.',
   'Workflow: browser_snapshot -> act on a [ref=eN] -> browser_snapshot only when the page changed.',
   'Prefer refs over coordinates; prefer browser_find over re-reading the whole snapshot;',
   'use browser_batch to run several actions in ONE call (biggest latency win).',

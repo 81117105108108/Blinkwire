@@ -40,7 +40,7 @@ Startup order, first validated hit wins:
 
 A port is only accepted if `/json/version` answers with a real `Browser` string — a browser that *owns* a port but serves no DevTools (the classic broken-9222 case) is skipped, not attached.
 
-If nothing debuggable exists, Blinkwire starts a managed Chrome itself on a verified-free port (message on stderr, `(Blinkwire-managed)` in `browser_status`). Pass `--no-auto-launch` if you'd rather fail than launch.
+If nothing debuggable exists, Blinkwire **fails with guidance instead of silently opening a new browser** — your tabs are yours. Pass `--launch` only when you explicitly want a separate, managed Chrome (it starts on a verified-free port, announces itself on stderr, and shows `(Blinkwire-managed)` in `browser_status`).
 
 Your own daily Chrome only becomes visible if you restart it once with a debugging port — Chrome only reads that flag at startup:
 
@@ -98,9 +98,8 @@ Every flag also reads a `BLINKWIRE_*` env var (e.g. `BLINKWIRE_PORT`).
 |---|---|---|
 | `--port`, `--host` | `9222`, `127.0.0.1` | Where Chrome exposes CDP |
 | `--cdp-endpoint` | — | Full endpoint, e.g. `http://127.0.0.1:9222` |
-| `--launch` | off | Force-launch a browser (even if one is found) |
-| `--auto-launch` / `--no-auto-launch` | on | Start a managed Chrome only when no debuggable one was found |
-| `--headless` | off | Only with `--launch` / auto-launch |
+| `--launch` | off | Opt in to a managed browser when no debuggable one is found (default: attach only, fail otherwise) |
+| `--headless` | off | Only with `--launch` |
 | `--executable-path` | auto | Chrome/Edge binary |
 | `--user-data-dir` | temp | Profile dir (only used when Blinkwire launches) |
 | `--match-url`, `--match-title`, `--match-index` | — | Which existing tab to attach to |
