@@ -1,0 +1,25 @@
+{
+  "name": "blinkwire",
+  "version": "0.1.0",
+  "description": "Drop-in Playwright-MCP replacement built directly on CDP. Attaches to your running Chrome. Fewer round-trips, fewer tokens.",
+  "type": "module",
+  "license": "GPL-3.0",
+  "bin": { "blinkwire": "dist/index.js" },
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "start": "node dist/index.js",
+    "test": "node tests/smoke.mjs && node tests/attach.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.0"
+  }
+}
