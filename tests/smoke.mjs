@@ -115,6 +115,13 @@ try {
   const after = await call('evaluate', { function: '() => document.getElementById("msg").textContent' });
   check('click handler fired with typed value', after.text.includes('clicked blinkwire'), after.text.trim());
 
+  await call('evaluate', { function: "() => { const q = document.getElementById('q'); q.value = ''; q.focus(); return true; }" });
+  await call('press_key', { key: '_' });
+  await call('press_key', { key: '{' });
+  await call('press_key', { key: 'A' });
+  const shifted = await call('evaluate', { function: "() => document.getElementById('q').value" });
+  check('press_key handles shifted punctuation + letters', shifted.text.includes('_{'), shifted.text.trim());
+
   const selRef = snap.text.split('\n').find((l) => /combobox/.test(l))?.match(/\[ref=(e\d+)\]/)?.[1];
   const sel = await call('select_option', { target: selRef, values: ['b'] });
   check('select_option', /Selected 1 option/.test(sel.text), sel.text.split('\n')[0]);

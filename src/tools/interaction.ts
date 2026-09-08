@@ -3,7 +3,7 @@ import { text } from '../core/types.js';
 import { BlinkwireError } from '../core/errors.js';
 import { settle } from '../core/wait.js';
 import { ensureInjected } from '../core/inject.js';
-import { keyDefinition, modifierBits, MODIFIER_BIT } from './keyboard.js';
+import { keyDefinition, modifierBit, modifierBits, MODIFIER_BIT } from '../input/keys.js';
 
 const BUTTON_BIT: Record<string, number> = { left: 1, right: 2, middle: 4 };
 
@@ -12,12 +12,12 @@ async function press(ctx: Parameters<ToolDef['handler']>[1], key: string, extraM
   const name = parts.pop() ?? '';
   let bits = extraModifiers;
   for (const p of parts) {
-    const b = MODIFIER_BIT[p.trim().toLowerCase()];
+    const b = modifierBit(p);
     if (!b) throw new BlinkwireError(`Unknown modifier "${p}". Use Alt, Ctrl, Meta or Shift.`, 'bad_arguments');
     bits |= b;
   }
   const d = keyDefinition(name.trim());
-  const shift = bits & MODIFIER_BIT.shift!;
+  const shift = bits & MODIFIER_BIT.shift;
   const payload: Record<string, unknown> = {
     type: 'keyDown',
     modifiers: bits,
@@ -357,3 +357,4 @@ export const tools: ToolDef[] = [
     },
   },
 ];
+
