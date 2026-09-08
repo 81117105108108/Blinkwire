@@ -5,8 +5,9 @@ import path from 'node:path';
 import { CdpConnection, CdpSession } from './client.js';
 import { PageSession } from './session.js';
 import { BlinkwireError, TimeoutError } from '../core/errors.js';
-import { debug, sleep } from '../core/log.js';
+import { debug, sleep, warn } from '../core/log.js';
 import { httpBase, type BlinkwireConfig } from '../config.js';
+import { discover, findFreePort, probe, type Discovered } from './discovery.js';
 
 export interface TargetInfo {
   id: string;
@@ -25,9 +26,11 @@ interface VersionInfo {
 }
 
 const HINT =
-  'Start Chrome with a debugging port, e.g.:\n' +
-  '  chrome.exe --remote-debugging-port=9222\n' +
-  'or let Blinkwire launch one:  blinkwire --launch [--headless]';
+  'Blinkwire could not find a Chrome with DevTools enabled. It always tries to attach first and only ' +
+  'starts a managed browser as a last resort.\n' +
+  'Do NOT start a browser yourself — call browser_connect instead (it auto-discovers), ' +
+  'or run blinkwire with --launch [--headless]. If your own Chrome is running but invisible to tools, ' +
+  'ask the user to restart it with --remote-debugging-port=9222 — Chrome only reads that flag at startup.';
 
 function findExecutable(explicit?: string): string {
   if (explicit) return explicit;
@@ -71,6 +74,7 @@ export class BrowserConnection {
   private child: ChildProcess | undefined;
   private spawned = false;
   private tempProfileDir: string | undefined;
+  private managed = false;
   private versionInfo: VersionInfo = { Browser: 'unknown' };
 
   private constructor(readonly cfg: ConnectOptions) {}
@@ -82,19 +86,53 @@ export class BrowserConnection {
   }
 
   private async boot(): Promise<void> {
-    let version = await this.tryVersion();
-    if (!version && this.cfg.launch) {
-      await this.launch();
-      version = await this.pollVersion(this.cfg.timeoutNavigation);
+    const host = this.cfg.host || '127.0.0.1';
+    let found: Discovered | undefined;
+    let version: VersionInfo | undefined;
+
+    if (this.cfg.cdpEndpoint) {
+      // Explicit endpoint wins; it must validate as real DevTools.
+      version = await this.tryVersion();
+      if (version) {
+        found = {
+          endpoint: this.cfg.cdpEndpoint.replace(/\/+$/, ''),
+          port: this.cfg.port,
+          source: '--cdp-endpoint',
+          version,
+        };
+      }
+    } else {
+      found = await discover({
+        host,
+        port: this.cfg.port,
+        userDataDir: this.cfg.userDataDir,
+        timeoutMs: Math.min(2000, this.cfg.timeoutNavigation),
+      });
+      version = found?.version;
     }
-    if (!version) {
-      throw new BlinkwireError(
-        `No CDP endpoint at ${httpBase(this.cfg)}.`,
-        'no_browser',
-        HINT,
-      );
+
+    let managed = false;
+    if (!found && (this.cfg.launch || this.cfg.autoLaunch)) {
+      // No debug-enabled browser anywhere we looked. Start a managed one on a
+      // port we verified is free — never reuse a port that something owns but
+      // does not serve as DevTools (that is the classic broken-9222 trap).
+      const port = await findFreePort(host);
+      this.cfg.port = port;
+      await this.launch(port);
+      version = await this.pollVersion(this.cfg.timeoutNavigation);
+      managed = true;
+      if (version) {
+        found = { endpoint: `http://${host}:${port}`, port, source: 'blinkwire-managed', version };
+        debug(`no debuggable Chrome found — started a managed one on :${port}`);
+        warn(`No Chrome with DevTools was found, so Blinkwire started a managed one on :${port}.`);
+      }
+    }
+
+    if (!found || !version) {
+      throw new BlinkwireError(`No CDP endpoint at ${httpBase(this.cfg)}.`, 'no_browser', HINT);
     }
     this.versionInfo = version;
+    this.managed = managed;
 
     if (version.webSocketDebuggerUrl) {
       this.conn = await CdpConnection.connect(version.webSocketDebuggerUrl, this.cfg.timeoutNavigation);
@@ -137,15 +175,17 @@ export class BrowserConnection {
     return undefined;
   }
 
-  private async launch(): Promise<void> {
+  private async launch(port?: number): Promise<void> {
     const exe = findExecutable(this.cfg.executablePath);
     let dir = this.cfg.userDataDir;
     if (!dir) {
       dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blinkwire-profile-'));
       this.tempProfileDir = dir;
     }
+    const usePort = port ?? this.cfg.port;
+    this.cfg.port = usePort;
     const args = [
-      `--remote-debugging-port=${this.cfg.port}`,
+      `--remote-debugging-port=${usePort}`,
       `--user-data-dir=${dir}`,
       '--no-first-run',
       '--no-default-browser-check',
@@ -186,6 +226,10 @@ export class BrowserConnection {
   }
   get version(): string {
     return this.versionInfo.Browser;
+  }
+  /** True when Blinkwire launched this browser itself (attach was impossible). */
+  get isManaged(): boolean {
+    return this.managed;
   }
 
   async versionInfo_(): Promise<VersionInfo> {

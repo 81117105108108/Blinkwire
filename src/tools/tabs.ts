@@ -107,7 +107,7 @@ const tools: ToolDef[] = [
     name: 'connect',
     title: 'Connect to a browser over CDP',
     description:
-      'Attach Blinkwire to a Chrome instance exposing the DevTools Protocol. Use this to switch browsers or tabs without restarting the server.',
+      'Attach Blinkwire to a Chrome instance. With no arguments it auto-discovers the running Chrome (configured port, then any debuggable instance it finds). Use this to switch browsers or tabs without restarting the server — never start a browser yourself.',
     params: {
       cdpEndpoint: { type: 'string', description: 'Base URL of the CDP endpoint, e.g. http://127.0.0.1:9222' },
       host: { type: 'string', description: 'Host to connect to (default 127.0.0.1)' },
@@ -137,20 +137,24 @@ const tools: ToolDef[] = [
     name: 'install',
     title: 'Show CDP setup instructions',
     description:
-      'Nothing to install. Blinkwire attaches to a Chrome you already run, so there is no browser download. Prints the exact setup steps.',
+      'Nothing to install — Blinkwire attaches to a Chrome you already run. IMPORTANT: never start a browser yourself. If no browser is visible, call browser_connect (it auto-discovers); the server starts a managed one on its own as a last resort.',
     readOnly: true,
     async handler(): Promise<CallResult> {
       return text(
         [
           'Blinkwire does not download or install a browser — it attaches over CDP.',
           '',
-          'Start Chrome with a debugging port:',
+          'You do not start Chrome. Blinkwire finds it: configured port, then any debuggable',
+          'instance in the running profiles, then a port sweep. Only if none exists does it',
+          'start a managed browser itself.',
+          '',
+          'If the user wants their OWN daily Chrome to be visible, they must restart it once with:',
           '  Windows: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9222',
           '  macOS:   /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222',
           '  Linux:   google-chrome --remote-debugging-port=9222',
+          'Chrome only reads that flag at startup; asking you to type or run it achieves nothing.',
           '',
-          'Verify with:  curl http://127.0.0.1:9222/json/version',
-          'Or let Blinkwire launch one for you:  blinkwire --launch [--headless]',
+          'Verify with:  blinkwire --check',
           '',
           'Note: Chrome ignores --remote-debugging-port if an instance with the same --user-data-dir is already running.',
         ].join('\n'),
@@ -166,7 +170,7 @@ const tools: ToolDef[] = [
       const s = ctx.session;
       return text(
         [
-          `browser:     ${ctx.conn.version}`,
+          `browser:     ${ctx.conn.version}${ctx.conn.isManaged ? ' (Blinkwire-managed)' : ' (user-attached)'}`,
           `target:      ${s.targetId}`,
           `url:         ${await s.url()}`,
           `navigations: ${s.buffers.navSeq}`,

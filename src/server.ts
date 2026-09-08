@@ -14,7 +14,10 @@ import { BlinkwireError, asBlinkwireError } from './core/errors.js';
 import { debug } from './core/log.js';
 
 const INSTRUCTIONS = [
-  'Blinkwire — fast CDP browser control. Attaches to a Chrome you already run.',
+  'Blinkwire — fast CDP browser control. It attaches to a Chrome the user already runs.',
+  'RULE 1: never start a browser yourself. No shell commands, no playwright, no new Chrome.',
+  'If a call reports no browser, use browser_connect — it auto-discovers — or let the',
+  'server start a managed one on its own. Your job is the page, not the process.',
   'Workflow: browser_snapshot -> act on a [ref=eN] -> browser_snapshot only when the page changed.',
   'Prefer refs over coordinates; prefer browser_find over re-reading the whole snapshot;',
   'use browser_batch to run several actions in ONE call (biggest latency win).',
@@ -43,9 +46,26 @@ export async function createServer(cfg: BlinkwireConfig): Promise<{ close(): Pro
   /**
    * MCP transports can deliver tool calls concurrently, while sessions and ref
    * stores are mutable shared state. Serialize execution per server instance.
+   * Each call also carries a hard ceiling (timeoutTool) so one wedged action
+   * can never park the whole queue forever.
    */
-  async function serializeToolCall<T>(task: () => Promise<T>): Promise<T> {
-    const result = requestChain.then(task, task);
+  async function serializeToolCall<T>(task: () => Promise<T>, extraMs = 0): Promise<T> {
+    const ceiling = Math.max(1000, cfg.timeoutTool) + Math.max(0, extraMs);
+    const guarded = async (): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<T>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new BlinkwireError(`Tool call exceeded its ${ceiling}ms ceiling.`, 'tool_timeout')),
+          ceiling,
+        );
+      });
+      try {
+        return await Promise.race([task(), timeout]);
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    const result = requestChain.then(guarded, guarded);
     requestChain = result.then(
       () => undefined,
       () => undefined,
@@ -92,6 +112,10 @@ export async function createServer(cfg: BlinkwireConfig): Promise<{ close(): Pro
       const known = allTools.map((t) => cfg.prefix + t.name).join(', ');
       return { content: [{ type: 'text', text: `Unknown tool "${name}". Known tools: ${known}` }], isError: true };
     }
+    // An explicit wait_for must be allowed to run its course.
+    const rawArgs = (req.params?.arguments ?? {}) as { time?: unknown };
+    const extraMs =
+      base === 'wait_for' && typeof rawArgs.time === 'number' && rawArgs.time > 0 ? rawArgs.time * 1000 : 0;
     return serializeToolCall(async () => {
     try {
       const args = validate(tool.params, req.params?.arguments ?? {});

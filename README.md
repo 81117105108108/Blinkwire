@@ -29,9 +29,20 @@ npm install
 npm run build
 ```
 
-### Point Chrome at a debugging port
+### Blinkwire finds your Chrome; you don't point it at one
 
-Blinkwire attaches rather than installs, so there is nothing to download.
+Startup order, first validated hit wins:
+
+1. `--cdp-endpoint`, if given
+2. the configured port (default `:9222`)
+3. any `DevToolsActivePort` your installed Chrome profiles advertise
+4. a sweep of `:9222`–`:9245`
+
+A port is only accepted if `/json/version` answers with a real `Browser` string — a browser that *owns* a port but serves no DevTools (the classic broken-9222 case) is skipped, not attached.
+
+If nothing debuggable exists, Blinkwire starts a managed Chrome itself on a verified-free port (message on stderr, `(Blinkwire-managed)` in `browser_status`). Pass `--no-auto-launch` if you'd rather fail than launch.
+
+Your own daily Chrome only becomes visible if you restart it once with a debugging port — Chrome only reads that flag at startup:
 
 ```bash
 # Windows
@@ -44,9 +55,9 @@ Blinkwire attaches rather than installs, so there is nothing to download.
 google-chrome --remote-debugging-port=9222
 ```
 
-Verify: `curl http://127.0.0.1:9222/json/version`
+Verify without starting a client: `blinkwire --check` (prints which browser it attached to, then exits).
 
-Or let Blinkwire launch one for you: `blinkwire --launch [--headless]`.
+Running `node dist/index.js` by hand with no MCP client attached now says so and exits instead of hanging.
 
 ## Configure your client
 
@@ -87,10 +98,11 @@ Every flag also reads a `BLINKWIRE_*` env var (e.g. `BLINKWIRE_PORT`).
 |---|---|---|
 | `--port`, `--host` | `9222`, `127.0.0.1` | Where Chrome exposes CDP |
 | `--cdp-endpoint` | — | Full endpoint, e.g. `http://127.0.0.1:9222` |
-| `--launch` | off | Spawn Chrome if nothing is listening |
-| `--headless` | off | Only with `--launch` |
+| `--launch` | off | Force-launch a browser (even if one is found) |
+| `--auto-launch` / `--no-auto-launch` | on | Start a managed Chrome only when no debuggable one was found |
+| `--headless` | off | Only with `--launch` / auto-launch |
 | `--executable-path` | auto | Chrome/Edge binary |
-| `--user-data-dir` | temp | Profile dir (only used with `--launch`) |
+| `--user-data-dir` | temp | Profile dir (only used when Blinkwire launches) |
 | `--match-url`, `--match-title`, `--match-index` | — | Which existing tab to attach to |
 | `--snapshot-mode` | `interactive` | `interactive` \| `full` \| `minimal` |
 | `--snapshot-boxes` | off | Add `[box=x,y,w,h]` to every node |
@@ -99,6 +111,8 @@ Every flag also reads a `BLINKWIRE_*` env var (e.g. `BLINKWIRE_PORT`).
 | `--image-responses` | `allow` | `omit` to suppress inline images |
 | `--network-capture` | off | Enable the Network domain (slower, but needed for `browser_network_requests`) |
 | `--timeout-settle` | `500` | Max ms to wait for the page to settle |
+| `--timeout-tool` | `60000` | Hard ceiling per tool call — a wedged action cannot stall the queue |
+| `--check` | — | Verify a browser is reachable, print which one, exit |
 | `--output-dir` | temp dir | Where `filename` arguments are written |
 | `--prefix` | `browser_` | Tool-name prefix |
 | `--debug` | off | Emit timings into `_meta` |

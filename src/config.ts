@@ -1,7 +1,8 @@
-export type SnapshotMode = 'interactive' | 'full' | 'minimal';
-export type ConsoleLevel = 'error' | 'warning' | 'info' | 'debug';
 import os from 'node:os';
 import path from 'node:path';
+
+export type SnapshotMode = 'interactive' | 'full' | 'minimal';
+export type ConsoleLevel = 'error' | 'warning' | 'info' | 'debug';
 
 export interface BlinkwireConfig {
   prefix: string;
@@ -9,6 +10,8 @@ export interface BlinkwireConfig {
   port: number;
   cdpEndpoint?: string;
   launch: boolean;
+  /** Launch a managed Chrome only when no debug-enabled browser was found. */
+  autoLaunch: boolean;
   executablePath?: string;
   userDataDir?: string;
   headless: boolean;
@@ -24,6 +27,8 @@ export interface BlinkwireConfig {
   timeoutAction: number;
   timeoutNavigation: number;
   timeoutSettle: number;
+  /** Hard ceiling on one tool call so a wedged action cannot stall the queue. */
+  timeoutTool: number;
 
   /** Network domain is OFF by default — it is the single biggest per-navigation cost. */
   networkCapture: boolean;
@@ -36,6 +41,7 @@ export const DEFAULT_CONFIG: BlinkwireConfig = {
   host: '127.0.0.1',
   port: 9222,
   launch: false,
+  autoLaunch: true,
   headless: false,
   snapshotMode: 'interactive',
   snapshotBoxes: false,
@@ -46,6 +52,7 @@ export const DEFAULT_CONFIG: BlinkwireConfig = {
   timeoutAction: 5000,
   timeoutNavigation: 30000,
   timeoutSettle: 500,
+  timeoutTool: 60000,
   networkCapture: false,
   testIdAttribute: 'data-testid',
   debug: false,
@@ -78,6 +85,8 @@ export function parseConfig(argv: string[]): BlinkwireConfig {
   if (e('USER_DATA_DIR')) cfg.userDataDir = e('USER_DATA_DIR');
   if (e('HEADLESS')) cfg.headless = e('HEADLESS') !== '0' && e('HEADLESS') !== 'false';
   if (e('LAUNCH')) cfg.launch = e('LAUNCH') === '1' || e('LAUNCH') === 'true';
+  if (e('AUTO_LAUNCH')) cfg.autoLaunch = e('AUTO_LAUNCH') === '1' || e('AUTO_LAUNCH') === 'true';
+  if (e('TIMEOUT_TOOL')) cfg.timeoutTool = Number(e('TIMEOUT_TOOL')) || cfg.timeoutTool;
   if (e('SNAPSHOT_MODE')) cfg.snapshotMode = e('SNAPSHOT_MODE') as SnapshotMode;
   if (e('MAX_OUTPUT_TOKENS')) cfg.maxOutputTokens = Number(e('MAX_OUTPUT_TOKENS')) || cfg.maxOutputTokens;
   if (e('CONSOLE_LEVEL')) cfg.consoleLevel = e('CONSOLE_LEVEL') as ConsoleLevel;
@@ -115,6 +124,7 @@ export function parseConfig(argv: string[]): BlinkwireConfig {
       case 'user-data-dir': cfg.userDataDir = next(); break;
       case 'headless': case 'no-headless': cfg.headless = bool() && key === 'headless'; break;
       case 'launch': case 'no-launch': cfg.launch = key === 'launch'; break;
+      case 'auto-launch': case 'no-auto-launch': cfg.autoLaunch = key === 'auto-launch'; break;
       case 'match-url': cfg.match = { ...cfg.match, url: next() }; break;
       case 'match-title': cfg.match = { ...cfg.match, title: next() }; break;
       case 'match-index': cfg.match = { ...cfg.match, index: Number(next()) }; break;
@@ -127,6 +137,7 @@ export function parseConfig(argv: string[]): BlinkwireConfig {
       case 'timeout-action': cfg.timeoutAction = Number(next()) || cfg.timeoutAction; break;
       case 'timeout-navigation': cfg.timeoutNavigation = Number(next()) || cfg.timeoutNavigation; break;
       case 'timeout-settle': cfg.timeoutSettle = Number(next()) || cfg.timeoutSettle; break;
+      case 'timeout-tool': cfg.timeoutTool = Number(next()) || cfg.timeoutTool; break;
       case 'network-capture': case 'no-network-capture': cfg.networkCapture = key === 'network-capture'; break;
       case 'test-id-attribute': cfg.testIdAttribute = next() ?? cfg.testIdAttribute; break;
       case 'debug': cfg.debug = true; break;
