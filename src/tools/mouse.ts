@@ -4,8 +4,6 @@ import { BlinkwireError } from '../core/errors.js';
 import { ensureInjected } from '../core/inject.js';
 import { settle } from '../core/wait.js';
 
-type Ctx = Parameters<ToolDef['handler']>[1];
-
 const BUTTON_BIT: Record<string, number> = { left: 1, right: 2, middle: 4 };
 
 export const tools: ToolDef[] = [

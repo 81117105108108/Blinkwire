@@ -4,10 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { CdpConnection, CdpSession } from './client.js';
 import { PageSession } from './session.js';
-import { BlinkwireError, TimeoutError } from '../core/errors.js';
+import { BlinkwireError } from '../core/errors.js';
 import { debug, sleep, warn } from '../core/log.js';
 import { httpBase, type BlinkwireConfig } from '../config.js';
-import { discover, findFreePort, probe, type Discovered } from './discovery.js';
+import { discover, findFreePort, type Discovered } from './discovery.js';
 
 export interface TargetInfo {
   id: string;
@@ -18,7 +18,7 @@ export interface TargetInfo {
   attached: boolean;
 }
 
-export interface ConnectOptions extends BlinkwireConfig {}
+export type ConnectOptions = BlinkwireConfig;
 
 interface VersionInfo {
   Browser: string;
@@ -26,13 +26,42 @@ interface VersionInfo {
 }
 
 const HINT =
-  'Blinkwire could not find a Chrome with DevTools enabled. It attaches to the user\'s running Chrome ' +
+  "Blinkwire could not find a Chrome with DevTools enabled. It attaches to the user's running Chrome " +
   'and never starts one of its own unless blinkwire was run with --launch.\n' +
   'Do NOT start a browser yourself — call browser_connect instead (it auto-discovers).\n' +
-  'If the user\'s own Chrome is running but invisible to tools, tell the user this exact fix: ' +
+  "If the user's own Chrome is running but invisible to tools, tell the user this exact fix: " +
   'fully quit Chrome first (a lingering background process can hold the port without serving DevTools), ' +
   'then restart it once with --remote-debugging-port=9222. Chrome only reads that flag at startup, ' +
   'so nothing else — no relaunch, no new tab, no extension — can expose an already-running session.';
+
+// Managed-launch temp profiles must not survive Ctrl+C / crash.
+const tempProfileDirs = new Set<string>();
+
+function cleanupTempProfiles(): void {
+  for (const dir of tempProfileDirs) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+    } catch {
+      /* best effort */
+    }
+  }
+  tempProfileDirs.clear();
+}
+
+process.once('exit', cleanupTempProfiles);
+process.once('SIGINT', () => {
+  cleanupTempProfiles();
+  process.exit(130);
+});
+process.once('SIGTERM', () => {
+  cleanupTempProfiles();
+  process.exit(143);
+});
+process.once('uncaughtException', (error) => {
+  cleanupTempProfiles();
+  console.error(error);
+  process.exit(1);
+});
 
 function findExecutable(explicit?: string): string {
   if (explicit) return explicit;
@@ -65,7 +94,11 @@ function findExecutable(explicit?: string): string {
       if (fs.existsSync(p)) return p;
     }
   }
-  throw new BlinkwireError('Could not locate a Chrome/Edge binary.', 'no_browser', `Pass --executable-path or set CHROME_PATH.\n${HINT}`);
+  throw new BlinkwireError(
+    'Could not locate a Chrome/Edge binary.',
+    'no_browser',
+    `Pass --executable-path or set CHROME_PATH.\n${HINT}`,
+  );
 }
 
 export class BrowserConnection {
@@ -141,17 +174,24 @@ export class BrowserConnection {
     this.managed = managed;
 
     if (version.webSocketDebuggerUrl) {
-      this.conn = await CdpConnection.connect(version.webSocketDebuggerUrl, this.cfg.timeoutNavigation);
+      this.conn = await CdpConnection.connect(
+        version.webSocketDebuggerUrl,
+        this.cfg.timeoutNavigation,
+      );
       this._browser = new CdpSession(this.conn);
     }
 
     const target = await this.pickInitialTarget();
-    if (!target) throw new BlinkwireError('No page target available to attach to.', 'no_target', HINT);
+    if (!target)
+      throw new BlinkwireError('No page target available to attach to.', 'no_target', HINT);
 
     if (this.conn && this._browser) {
       await this.attach(target.id);
     } else if (target.webSocketDebuggerUrl) {
-      this.conn = await CdpConnection.connect(target.webSocketDebuggerUrl, this.cfg.timeoutNavigation);
+      this.conn = await CdpConnection.connect(
+        target.webSocketDebuggerUrl,
+        this.cfg.timeoutNavigation,
+      );
       const s = new CdpSession(this.conn);
       this._current = new PageSession(this, target.id, s);
       this.attached.set(target.id, this._current);
@@ -163,7 +203,9 @@ export class BrowserConnection {
 
   private async tryVersion(): Promise<VersionInfo | undefined> {
     try {
-      const res = await fetch(`${httpBase(this.cfg)}/json/version`, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(`${httpBase(this.cfg)}/json/version`, {
+        signal: AbortSignal.timeout(2000),
+      });
       if (!res.ok) return undefined;
       return (await res.json()) as VersionInfo;
     } catch {
@@ -187,6 +229,7 @@ export class BrowserConnection {
     if (!dir) {
       dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blinkwire-profile-'));
       this.tempProfileDir = dir;
+      tempProfileDirs.add(dir);
     }
     const usePort = port ?? this.cfg.port;
     this.cfg.port = usePort;
@@ -271,7 +314,9 @@ export class BrowserConnection {
       }
     }
     try {
-      const res = await fetch(`${httpBase(this.cfg)}/json/list`, { signal: AbortSignal.timeout(3000) });
+      const res = await fetch(`${httpBase(this.cfg)}/json/list`, {
+        signal: AbortSignal.timeout(3000),
+      });
       const json = (await res.json()) as any[];
       return json
         .filter((t) => !type || t.type === type)
@@ -284,7 +329,11 @@ export class BrowserConnection {
           attached: !!t.attached,
         }));
     } catch (e) {
-      throw new BlinkwireError(`Could not list targets: ${(e as Error).message}`, 'no_browser', HINT);
+      throw new BlinkwireError(
+        `Could not list targets: ${(e as Error).message}`,
+        'no_browser',
+        HINT,
+      );
     }
   }
 
@@ -297,13 +346,20 @@ export class BrowserConnection {
     const browser = this._browser;
     let s: CdpSession;
     if (browser) {
-      const r = await browser.send<{ sessionId: string }>('Target.attachToTarget', { targetId, flatten: true });
+      const r = await browser.send<{ sessionId: string }>('Target.attachToTarget', {
+        targetId,
+        flatten: true,
+      });
       s = this.conn.session(r.sessionId);
     } else {
       const list = await this.targets();
       const t = list.find((x) => x.id === targetId);
-      if (!t?.webSocketDebuggerUrl) throw new BlinkwireError(`Cannot attach to ${targetId}.`, 'no_target');
-      const direct = await CdpConnection.connect(t.webSocketDebuggerUrl, this.cfg.timeoutNavigation);
+      if (!t?.webSocketDebuggerUrl)
+        throw new BlinkwireError(`Cannot attach to ${targetId}.`, 'no_target');
+      const direct = await CdpConnection.connect(
+        t.webSocketDebuggerUrl,
+        this.cfg.timeoutNavigation,
+      );
       s = new CdpSession(direct);
     }
     const ps = new PageSession(this, targetId, s);
@@ -319,8 +375,14 @@ export class BrowserConnection {
       id = r.targetId;
     } else {
       const base = httpBase(this.cfg);
-      let res = await fetch(`${base}/json/new?${encodeURIComponent(url)}`, { method: 'PUT', signal: AbortSignal.timeout(5000) });
-      if (!res.ok) res = await fetch(`${base}/json/new?${encodeURIComponent(url)}`, { signal: AbortSignal.timeout(5000) });
+      let res = await fetch(`${base}/json/new?${encodeURIComponent(url)}`, {
+        method: 'PUT',
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok)
+        res = await fetch(`${base}/json/new?${encodeURIComponent(url)}`, {
+          signal: AbortSignal.timeout(5000),
+        });
       const j = (await res.json()) as { id: string };
       id = j.id;
     }
@@ -341,7 +403,10 @@ export class BrowserConnection {
     }
     try {
       if (this._browser) await this._browser.send('Target.closeTarget', { targetId });
-      else await fetch(`${httpBase(this.cfg)}/json/close/${targetId}`, { signal: AbortSignal.timeout(3000) });
+      else
+        await fetch(`${httpBase(this.cfg)}/json/close/${targetId}`, {
+          signal: AbortSignal.timeout(3000),
+        });
     } catch {
       /* already gone */
     }
@@ -380,6 +445,7 @@ export class BrowserConnection {
       }
     }
     if (this.tempProfileDir) {
+      tempProfileDirs.delete(this.tempProfileDir);
       try {
         fs.rmSync(this.tempProfileDir, { recursive: true, force: true, maxRetries: 3 });
       } catch {
@@ -389,4 +455,3 @@ export class BrowserConnection {
     }
   }
 }
-

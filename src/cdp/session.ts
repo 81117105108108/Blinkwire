@@ -303,7 +303,7 @@ export class PageSession {
     return res?.result?.value as R;
   }
 
-  async queryObjectId(selector: string, opts?: { rootObjectId?: string }): Promise<string> {
+  async queryObjectId(selector: string, _opts?: { rootObjectId?: string }): Promise<string> {
     const navSeq = this.buffers.navSeq;
     let rootNodeId = this.rootCache?.navSeq === navSeq ? this.rootCache.nodeId : undefined;
     if (rootNodeId === undefined) {

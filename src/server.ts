@@ -179,7 +179,7 @@ export async function createServer(cfg: BlinkwireConfig): Promise<{ close(): Pro
       debug(`${name} failed:`, be.message);
       return { content: toMcpContent(be.toCallResult()), isError: true };
     }
-    });
+    }, extraMs);
   });
 
   const transport = new StdioServerTransport();

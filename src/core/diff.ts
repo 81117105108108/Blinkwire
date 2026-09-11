@@ -1,7 +1,12 @@
 /**
  * Dependency-free line diff. Trims the common prefix/suffix, then runs an LCS on
  * the (usually tiny) middle. Falls back to a cheap set-based diff for huge middles.
+ *
+ * Very large snapshots produce a coarser diff once (a.length+1)*(b.length+1)
+ * exceeds MAX_DP_CELLS. Override with BLINKWIRE_MAX_DP_CELLS.
  */
+export const MAX_DP_CELLS = Number(process.env.BLINKWIRE_MAX_DP_CELLS ?? 4_000_000);
+
 export function diffText(prev: string, next: string, contextLines = 2): string {
   const a = prev.split('\n');
   const b = next.split('\n');
@@ -24,7 +29,7 @@ export function diffText(prev: string, next: string, contextLines = 2): string {
   let ops: Array<{ t: ' ' | '+' | '-'; s: string }> = [];
   if (midA.length === 0 && midB.length === 0) {
     ops = [];
-  } else if (midA.length * midB.length > 4_000_000) {
+  } else if (midA.length * midB.length > MAX_DP_CELLS) {
     ops = cheapDiff(midA, midB);
   } else {
     ops = lcsDiff(midA, midB);
@@ -82,7 +87,8 @@ function withContext(lines: string[], ctx: number): string {
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i]![0];
     if (t === '+' || t === '-') {
-      for (let k = Math.max(0, i - ctx); k <= Math.min(lines.length - 1, i + ctx); k++) keep[k] = true;
+      for (let k = Math.max(0, i - ctx); k <= Math.min(lines.length - 1, i + ctx); k++)
+        keep[k] = true;
     }
   }
   const out: string[] = [];

@@ -1,11 +1,27 @@
 # Blinkwire
 
+[![CI](https://github.com/81117105108108/Blinkwire/actions/workflows/ci.yml/badge.svg)](https://github.com/81117105108108/Blinkwire/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/blinkwire.svg)](https://www.npmjs.com/package/blinkwire)
+[![license](https://img.shields.io/github/license/81117105108108/Blinkwire.svg)](https://github.com/81117105108108/Blinkwire/blob/main/LICENSE)
+[![node](https://img.shields.io/node/v/blinkwire.svg)](https://nodejs.org/)
+
 A drop-in replacement for [Playwright MCP](https://github.com/microsoft/playwright-mcp) built **directly on the Chrome DevTools Protocol**. No Playwright, no Puppeteer, no browser download. Blinkwire attaches to a Chrome you already have running and gives an LLM the same tools, with fewer round-trips and far fewer tokens.
 
 ```
 playwright-mcp:  spawn browser (~1-3s) → Playwright → CDP → polling actionability → accessibility tree
 blinkwire:       attach (0ms) → CDP → 1-4 calls per action → pruned tree
 ```
+
+## Table of Contents
+
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Tools](#tools)
+- [Examples](#examples)
+- [Development](#development)
+- [Security](#security)
+- [License](#license)
 
 ## Why it is faster
 
@@ -172,8 +188,39 @@ Covers the primary Playwright MCP core automation and utility surface, plus a fe
 
 ```bash
 npm run build     # tsc -> dist/
-npm test          # smoke + attach suites (spawn real Chrome)
+npm test          # unit tests (node --test + tsx)
+npm run test:integration  # smoke + attach suites (spawn real Chrome)
+npm run lint
+npm run coverage
 npm run dev       # watch
 ```
+
+## Examples
+
+End-to-end via MCP client (tool names use default `browser_` prefix):
+
+```ts
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+
+const browser = await Blinkwire.launch();
+
+await browser.browser_navigate({ url: 'https://example.com' });
+await browser.browser_click({ target: 'e4' });
+await browser.browser_type({ target: 'e3', text: 'user@example.com' });
+await browser.browser_click({ target: 'e9' });
+await browser.browser_wait_for({ text: 'Dashboard' });
+
+const snapshot = await browser.browser_snapshot();
+console.log(snapshot);
+
+await browser.close();
+```
+
+## Diff limits
+
+`diffText` trims common prefix/suffix then LCS on the middle. Once
+`(a.length+1)*(b.length+1)` exceeds `MAX_DP_CELLS` (default `4_000_000`,
+override with `BLINKWIRE_MAX_DP_CELLS`) it falls back to a cheap
+set-based diff — very large snapshots stay fast but coarser.
 
 Architecture: `src/cdp` (transport, discovery, session) → `src/core` (refs, snapshot, diff, wait, image, budget) → `src/tools` (one module per tool family) → `src/server.ts` (MCP wiring).

@@ -1,0 +1,28 @@
+name: Bug report
+description: Create a report to help us improve
+title: '[Bug]: '
+labels: ['bug']
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Blinkwire version
+      placeholder: 1.2.3
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Include commands, config, and expected vs actual behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node version, Chrome version.
+    validations:
+      required: true

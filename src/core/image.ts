@@ -31,7 +31,7 @@ export async function screenshot(session: PageSession, opts: ShotOpts = {}): Pro
   const format = opts.format ?? 'png';
   const mime = MIME[format]!;
   const maxBytes = opts.maxBytes ?? 1_500_000;
-  let quality = opts.quality ?? (format === 'png' ? undefined : 80);
+  const quality = opts.quality ?? (format === 'png' ? undefined : 80);
 
   let clip: { x: number; y: number; width: number; height: number; scale: number } | undefined;
   if (opts.target && opts.resolveBox) {
@@ -60,7 +60,8 @@ export async function screenshot(session: PageSession, opts: ShotOpts = {}): Pro
 
   // maxWidth is honoured by rendering at a reduced device scale factor — no image
   // library needed, and it shrinks the payload before it ever reaches the model.
-  const widthDsf = opts.maxWidth && opts.maxWidth > 0 && width > opts.maxWidth ? opts.maxWidth / width : 1;
+  const widthDsf =
+    opts.maxWidth && opts.maxWidth > 0 && width > opts.maxWidth ? opts.maxWidth / width : 1;
 
   const ladder: Array<{ quality?: number; dsf: number }> = [
     { quality, dsf: widthDsf },

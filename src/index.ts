@@ -96,6 +96,10 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => void shutdown());
   process.on('SIGTERM', () => void shutdown());
   process.on('disconnect', () => void shutdown());
+  process.on('uncaughtException', (error) => {
+    warn(error instanceof Error ? error.message : String(error));
+    void shutdown().finally(() => process.exit(1));
+  });
 }
 
 main().catch((e) => {
