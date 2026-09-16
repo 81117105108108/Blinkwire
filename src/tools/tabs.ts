@@ -115,6 +115,7 @@ const tools: ToolDef[] = [
       matchUrl: { type: 'string', description: 'Attach to the tab whose URL contains this text' },
       matchTitle: { type: 'string', description: 'Attach to the tab whose title contains this text' },
       index: { type: 'integer', description: 'Attach to the Nth matching tab' },
+      allowLaunch: { type: 'boolean', description: 'Opt in to starting a managed browser if none is found (default false — attach only)' },
     },
     async handler(args, ctx): Promise<CallResult> {
       const { BrowserConnection } = await import('../cdp/connection.js');
@@ -122,6 +123,10 @@ const tools: ToolDef[] = [
       if (args.cdpEndpoint) cfg.cdpEndpoint = args.cdpEndpoint as string;
       if (args.host) cfg.host = args.host as string;
       if (typeof args.port === 'number') cfg.port = args.port as number;
+      // occam: browser_connect is attach-only — never inherit --launch from server cfg.
+      const allowLaunch = args.allowLaunch === true;
+      cfg.launch = allowLaunch;
+      cfg.autoLaunch = allowLaunch;
       const m: { url?: string; title?: string; index?: number } = {};
       if (args.matchUrl) m.url = args.matchUrl as string;
       if (args.matchTitle) m.title = args.matchTitle as string;
@@ -171,8 +176,10 @@ const tools: ToolDef[] = [
       return text(
         [
           `browser:     ${ctx.conn.version}${ctx.conn.isManaged ? ' (Blinkwire-managed)' : ' (user-attached)'}`,
+          `endpoint:    ${ctx.conn.endpoint}`,
           `target:      ${s.targetId}`,
           `url:         ${await s.url()}`,
+          `alive:       ${ctx.conn.isAlive ? 'yes' : 'no (next call reconnects)'}`,
           `navigations: ${s.buffers.navSeq}`,
           `refs:        ${ctx.refs.size}`,
           `console:     ${s.buffers.console.size} entries`,

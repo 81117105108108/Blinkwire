@@ -84,7 +84,13 @@ export async function createServer(cfg: BlinkwireConfig): Promise<{ close(): Pro
       }
       conn = o;
     }
-    if (!conn || conn.current.closed) {
+    // occam: PageSession.closed misses WS drops — isAlive covers transport + session.
+    if (!conn || !conn.isAlive) {
+      try {
+        await conn?.close();
+      } catch {
+        /* ignore stale socket */
+      }
       conn = await BrowserConnection.open(cfg);
     }
     return conn;

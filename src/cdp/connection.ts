@@ -7,7 +7,7 @@ import { PageSession } from './session.js';
 import { BlinkwireError } from '../core/errors.js';
 import { debug, sleep, warn } from '../core/log.js';
 import { httpBase, type BlinkwireConfig } from '../config.js';
-import { discover, findFreePort, type Discovered } from './discovery.js';
+import { discoverVerbose, findFreePort, type Discovered, type ProbeAttempt } from './discovery.js';
 
 export interface TargetInfo {
   id: string;
@@ -111,8 +111,14 @@ export class BrowserConnection {
   private tempProfileDir: string | undefined;
   private managed = false;
   private versionInfo: VersionInfo = { Browser: 'unknown' };
+  /** Resolved HTTP base for all DevTools REST calls — synced to discovery, never stale cfg. */
+  private httpEndpoint: string;
+  /** Every endpoint probed during boot — surfaced in errors and --check. */
+  private tried: ProbeAttempt[] = [];
 
-  private constructor(readonly cfg: ConnectOptions) {}
+  private constructor(readonly cfg: ConnectOptions) {
+    this.httpEndpoint = httpBase(cfg);
+  }
 
   static async open(opts: ConnectOptions): Promise<BrowserConnection> {
     const c = new BrowserConnection(opts);
@@ -127,23 +133,35 @@ export class BrowserConnection {
 
     if (this.cfg.cdpEndpoint) {
       // Explicit endpoint wins; it must validate as real DevTools.
+      this.httpEndpoint = this.cfg.cdpEndpoint.replace(/\/+$/, '');
       version = await this.tryVersion();
       if (version) {
         found = {
-          endpoint: this.cfg.cdpEndpoint.replace(/\/+$/, ''),
+          endpoint: this.httpEndpoint,
           port: this.cfg.port,
           source: '--cdp-endpoint',
           version,
         };
+      } else {
+        this.tried = [
+          { endpoint: this.httpEndpoint, port: this.cfg.port, source: '--cdp-endpoint', ok: false, detail: 'no DevTools answer' },
+        ];
       }
     } else {
-      found = await discover({
+      const v = await discoverVerbose({
         host,
         port: this.cfg.port,
         userDataDir: this.cfg.userDataDir,
         timeoutMs: Math.min(2000, this.cfg.timeoutNavigation),
       });
+      this.tried = v.tried;
+      found = v.found;
       version = found?.version;
+      if (found) {
+        // occam: pin every later HTTP call to the endpoint that actually answered.
+        this.httpEndpoint = found.endpoint;
+        this.cfg.port = found.port;
+      }
     }
 
     let managed = false;
@@ -153,11 +171,12 @@ export class BrowserConnection {
       // does not serve as DevTools (that is the classic broken-9222 trap).
       const port = await findFreePort(host);
       this.cfg.port = port;
+      this.httpEndpoint = `http://${host}:${port}`;
       await this.launch(port);
       version = await this.pollVersion(this.cfg.timeoutNavigation);
       managed = true;
       if (version) {
-        found = { endpoint: `http://${host}:${port}`, port, source: 'blinkwire-managed', version };
+        found = { endpoint: this.httpEndpoint, port, source: 'blinkwire-managed', version };
         debug(`no debuggable Chrome found — started a managed one on :${port}`);
         warn(
           `No Chrome with DevTools was found, so --launch started a managed one on :${port}. ` +
@@ -168,7 +187,11 @@ export class BrowserConnection {
     }
 
     if (!found || !version) {
-      throw new BlinkwireError(`No CDP endpoint at ${httpBase(this.cfg)}.`, 'no_browser', HINT);
+      throw new BlinkwireError(
+        `No CDP endpoint at ${this.httpEndpoint}.`,
+        'no_browser',
+        `${HINT}\nProbed: ${this.tried.map((t) => `${t.endpoint} [${t.source}] ${t.ok ? 'ok' : t.detail ?? 'refused'}`).join(' | ') || 'nothing reachable'}`,
+      );
     }
     this.versionInfo = version;
     this.managed = managed;
@@ -203,7 +226,7 @@ export class BrowserConnection {
 
   private async tryVersion(): Promise<VersionInfo | undefined> {
     try {
-      const res = await fetch(`${httpBase(this.cfg)}/json/version`, {
+      const res = await fetch(`${this.httpEndpoint}/json/version`, {
         signal: AbortSignal.timeout(2000),
       });
       if (!res.ok) return undefined;
@@ -267,6 +290,24 @@ export class BrowserConnection {
   get connRaw(): CdpConnection {
     return this.conn;
   }
+  /** Resolved DevTools HTTP base (post-discovery). Use for diagnostics, not httpBase(cfg). */
+  get endpoint(): string {
+    return this.httpEndpoint;
+  }
+  /** Every endpoint probed during boot. */
+  get probed(): ProbeAttempt[] {
+    return this.tried;
+  }
+  /** False when the transport dropped (Chrome quit, WS closed) — caller must reconnect. */
+  get isAlive(): boolean {
+    try {
+      if (!this.conn || this.conn.closed) return false;
+      if (this._current && (this._current.closed || this._current.cdp.closed)) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
   get browser(): CdpSession | undefined {
     return this._browser;
   }
@@ -314,7 +355,7 @@ export class BrowserConnection {
       }
     }
     try {
-      const res = await fetch(`${httpBase(this.cfg)}/json/list`, {
+      const res = await fetch(`${this.httpEndpoint}/json/list`, {
         signal: AbortSignal.timeout(3000),
       });
       const json = (await res.json()) as any[];
@@ -339,10 +380,11 @@ export class BrowserConnection {
 
   async attach(targetId: string): Promise<PageSession> {
     const cached = this.attached.get(targetId);
-    if (cached && !cached.closed) {
+    if (cached && !cached.closed && !cached.cdp.closed) {
       this._current = cached;
       return cached;
     }
+    if (cached) this.attached.delete(targetId);
     const browser = this._browser;
     let s: CdpSession;
     if (browser) {
@@ -374,13 +416,12 @@ export class BrowserConnection {
       const r = await this._browser.send<{ targetId: string }>('Target.createTarget', { url });
       id = r.targetId;
     } else {
-      const base = httpBase(this.cfg);
-      let res = await fetch(`${base}/json/new?${encodeURIComponent(url)}`, {
+      let res = await fetch(`${this.httpEndpoint}/json/new?${encodeURIComponent(url)}`, {
         method: 'PUT',
         signal: AbortSignal.timeout(5000),
       });
       if (!res.ok)
-        res = await fetch(`${base}/json/new?${encodeURIComponent(url)}`, {
+        res = await fetch(`${this.httpEndpoint}/json/new?${encodeURIComponent(url)}`, {
           signal: AbortSignal.timeout(5000),
         });
       const j = (await res.json()) as { id: string };
@@ -404,7 +445,7 @@ export class BrowserConnection {
     try {
       if (this._browser) await this._browser.send('Target.closeTarget', { targetId });
       else
-        await fetch(`${httpBase(this.cfg)}/json/close/${targetId}`, {
+        await fetch(`${this.httpEndpoint}/json/close/${targetId}`, {
           signal: AbortSignal.timeout(3000),
         });
     } catch {

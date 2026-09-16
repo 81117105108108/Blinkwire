@@ -33,8 +33,8 @@ function printHelp(): void {
       '  --help                This text',
       '  --version             Print the version',
       '',
-      'Attach behaviour: explicit endpoint → configured port → DevToolsActivePort of',
-      'running profiles → port sweep :9222-:9245. A separate browser is started only',
+      'Attach behaviour: explicit endpoint → configured port (127.0.0.1 + localhost) → DevToolsActivePort of',
+      'running profiles → process --remote-debugging-port args → port sweep :9222-:9245. A separate browser is started only',
       'with --launch, on a verified-free port. Without it, a missing browser is an',
       'error with instructions — never a surprise new Chrome.',
       '',
@@ -47,14 +47,32 @@ function printHelp(): void {
 /** One-shot diagnostic: prove a browser is reachable, say exactly which one, exit. */
 async function runCheck(): Promise<void> {
   const cfg = parseConfig(process.argv.slice(2).filter((a) => a !== '--check'));
-  const conn = await BrowserConnection.open(cfg);
+  const { discoverVerbose } = await import('./cdp/discovery.js');
   try {
-    const url = await conn.current.url();
-    process.stdout.write(
-      `ok: attached to ${conn.version}${conn.isManaged ? ' (Blinkwire-managed)' : ''}\ntab: ${url}\n`,
+    const conn = await BrowserConnection.open(cfg);
+    try {
+      const url = await conn.current.url();
+      process.stdout.write(
+        `ok: attached to ${conn.version}${conn.isManaged ? ' (Blinkwire-managed)' : ''}\nendpoint: ${conn.endpoint}\ntab: ${url}\n`,
+      );
+    } finally {
+      await conn.close();
+    }
+  } catch (e) {
+    // Attach failed — show every endpoint tried so the fix is obvious.
+    const v = await discoverVerbose({
+      host: cfg.host,
+      port: cfg.port,
+      userDataDir: cfg.userDataDir,
+      timeoutMs: 1500,
+    }).catch(() => ({ tried: [] as Array<{ endpoint: string; source: string; ok: boolean; detail?: string }> }));
+    const lines = v.tried.map(
+      (t) => `  ${t.ok ? 'OK  ' : 'FAIL'} ${t.endpoint} [${t.source}]${t.detail ? ` — ${t.detail}` : ''}`,
     );
-  } finally {
-    await conn.close();
+    process.stderr.write(
+      `${e instanceof Error ? e.message : String(e)}\nProbed:\n${lines.join('\n') || '  (nothing reachable)'}\nFix: fully quit Chrome, restart once with --remote-debugging-port=9222, then blinkwire --check.\n`,
+    );
+    process.exitCode = 1;
   }
 }
 

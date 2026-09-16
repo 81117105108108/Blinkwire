@@ -1,7 +1,11 @@
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 export interface VersionInfo {
   Browser: string;
@@ -71,7 +75,58 @@ function profileDirs(extra?: string): string[] {
   return dirs;
 }
 
-/** Ports advertised by already-running Chrome instances via DevToolsActivePort. */
+export interface ProbeAttempt {
+  endpoint: string;
+  port: number;
+  source: string;
+  ok: boolean;
+  detail?: string;
+}
+
+export interface DiscoverVerbose {
+  found?: Discovered;
+  tried: ProbeAttempt[];
+}
+
+/** Loopback aliases: Chrome may bind localhost while we probe 127.0.0.1 and vice versa. */
+function hostVariants(host: string): string[] {
+  if (host === '127.0.0.1') return ['127.0.0.1', 'localhost'];
+  if (host === 'localhost') return ['localhost', '127.0.0.1'];
+  return [host];
+}
+
+/** Ports from running browser command lines (--remote-debugging-port=...). */
+export async function processPortHints(timeoutMs = 3000): Promise<number[]> {
+  const out = new Set<number>();
+  const collect = (text: string): void => {
+    for (const m of text.matchAll(/--remote-debugging-port[=\s]+(\d{2,5})/g)) {
+      const p = Number(m[1]);
+      if (Number.isInteger(p) && p > 0 && p < 65536) out.add(p);
+    }
+  };
+  try {
+    if (process.platform === 'win32') {
+      // PowerShell CIM is the reliable cmdline source on modern Windows (wmic is deprecated).
+      const { stdout } = await execFileAsync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          "Get-CimInstance Win32_Process -Filter \"(Name='chrome.exe' OR Name='msedge.exe' OR Name='chromium.exe')\" | Select-Object -ExpandProperty CommandLine",
+        ],
+        { timeout: timeoutMs, windowsHide: true },
+      );
+      collect(stdout ?? '');
+    } else {
+      const { stdout } = await execFileAsync('ps', ['-axo', 'command'], { timeout: timeoutMs });
+      collect(stdout ?? '');
+    }
+  } catch {
+    /* process scan is best-effort; HTTP probing still runs */
+  }
+  return [...out];
+}
 export function portHints(extra?: string): number[] {
   const out: number[] = [];
   for (const dir of profileDirs(extra)) {
@@ -88,19 +143,55 @@ export function portHints(extra?: string): number[] {
   return [...new Set(out)];
 }
 
+export async function probeWithDetail(
+  endpoint: string,
+  timeoutMs = 1500,
+): Promise<{ version?: VersionInfo; detail?: string }> {
+  const url = `${endpoint.replace(/\/+$/, '')}/json/version`;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return { detail: `HTTP ${res.status}` };
+    const j = (await res.json()) as VersionInfo;
+    if (!j || typeof j.Browser !== 'string' || j.Browser.length === 0)
+      return { detail: 'not DevTools (no Browser string)' };
+    return { version: j };
+  } catch (e) {
+    const msg = e instanceof Error ? e.name : 'fetch failed';
+    return { detail: msg === 'TimeoutError' ? `timeout ${timeoutMs}ms` : 'connection refused' };
+  }
+}
+
 export async function scanPorts(host: string, ports: number[], timeoutMs = 600): Promise<Discovered | undefined> {
-  const found = await Promise.all(
-    ports.map(async (port) => {
-      const version = await probe(`http://${host}:${port}`, timeoutMs);
-      return version ? { endpoint: `http://${host}:${port}`, port, source: `port scan :${port}`, version } : undefined;
-    }),
-  );
-  return found.find((f): f is Discovered => f !== undefined);
+  const v = await scanPortsVerbose(host, ports, timeoutMs, 'port scan');
+  return v.found;
+}
+
+export async function scanPortsVerbose(
+  host: string,
+  ports: number[],
+  timeoutMs = 600,
+  sourcePrefix = 'port scan',
+): Promise<DiscoverVerbose> {
+  const tried: ProbeAttempt[] = [];
+  for (const port of ports) {
+    const endpoint = `http://${host}:${port}`;
+    const { version, detail } = await probeWithDetail(endpoint, timeoutMs);
+    tried.push({ endpoint, port, source: `${sourcePrefix} :${port}`, ok: !!version, detail });
+    if (version) return { found: { endpoint, port, source: `${sourcePrefix} :${port}`, version }, tried };
+  }
+  return { tried };
 }
 
 /** Find the best available Chrome, validating that DevTools is actually served. */
 export async function discover(o: DiscoverOptions): Promise<Discovered | undefined> {
+  const v = await discoverVerbose(o);
+  return v.found;
+}
+
+/** Same as discover() but reports every endpoint tried — for --check and error hints. */
+export async function discoverVerbose(o: DiscoverOptions): Promise<DiscoverVerbose> {
   const host = o.host || '127.0.0.1';
+  const tried: ProbeAttempt[] = [];
   const seen = new Set<string>();
   const candidates: Array<{ endpoint: string; port: number; source: string }> = [];
 
@@ -111,17 +202,30 @@ export async function discover(o: DiscoverOptions): Promise<Discovered | undefin
   };
 
   if (o.cdpEndpoint) add(o.cdpEndpoint.replace(/\/+$/, ''), o.port, '--cdp-endpoint');
-  add(`http://${host}:${o.port}`, o.port, `configured port :${o.port}`);
-  for (const p of portHints(o.userDataDir)) add(`http://${host}:${p}`, p, `DevToolsActivePort :${p}`);
+  // Probe loopback aliases: Chrome may listen on localhost while cfg says 127.0.0.1.
+  for (const h of hostVariants(host)) add(`http://${h}:${o.port}`, o.port, `configured port :${o.port} (${h})`);
+  for (const p of portHints(o.userDataDir))
+    for (const h of hostVariants(host)) add(`http://${h}:${p}`, p, `DevToolsActivePort :${p} (${h})`);
+  // Running-process ports catch --remote-debugging-port values outside the sweep range.
+  for (const p of await processPortHints())
+    for (const h of hostVariants(host)) add(`http://${h}:${p}`, p, `process arg :${p} (${h})`);
 
   for (const c of candidates) {
-    const version = await probe(c.endpoint, o.timeoutMs ?? 1500);
-    if (version) return { ...c, version };
+    const { version, detail } = await probeWithDetail(c.endpoint, o.timeoutMs ?? 1500);
+    tried.push({ ...c, ok: !!version, detail });
+    if (version) return { found: { ...c, version }, tried };
   }
 
-  // Last resort: sweep the usual DevTools range.
-  const range = Array.from({ length: 24 }, (_, i) => 9222 + i).filter((p) => !seen.has(`http://${host}:${p}`));
-  return scanPorts(host, range, 600);
+  // Last resort: sweep the usual DevTools range on every loopback alias.
+  for (const h of hostVariants(host)) {
+    const range = Array.from({ length: 24 }, (_, i) => 9222 + i).filter(
+      (p) => !seen.has(`http://${h}:${p}`),
+    );
+    const sweep = await scanPortsVerbose(h, range, 600);
+    tried.push(...sweep.tried);
+    if (sweep.found) return { found: sweep.found, tried };
+  }
+  return { tried };
 }
 
 export async function findFreePort(host = '127.0.0.1'): Promise<number> {
