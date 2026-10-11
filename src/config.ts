@@ -1,7 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 
-export type SnapshotMode = 'interactive' | 'full' | 'minimal';
+export type SnapshotMode = 'interactive' | 'full' | 'minimal' | 'text';
 export type ConsoleLevel = 'error' | 'warning' | 'info' | 'debug';
 
 export interface BlinkwireConfig {

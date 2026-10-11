@@ -27,7 +27,7 @@ const JSON_TYPE: Record<FieldType, string> = {
 export function toJsonSchema(spec: ParamSpec): {
   type: 'object';
   properties: Record<string, unknown>;
-  required: string[];
+  required?: string[];
   additionalProperties: false;
 } {
   const properties: Record<string, unknown> = {};
@@ -49,7 +49,12 @@ export function toJsonSchema(spec: ParamSpec): {
     properties[name] = prop;
     if (f.required) required.push(name);
   }
-  return { type: 'object', properties, required, additionalProperties: false };
+  return {
+    type: 'object',
+    properties,
+    ...(required.length ? { required } : {}),
+    additionalProperties: false,
+  };
 }
 
 function checkType(name: string, v: unknown, t: FieldType, f: Field): unknown {

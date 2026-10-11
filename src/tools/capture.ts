@@ -127,7 +127,7 @@ export const tools: ToolDef[] = [
     name: 'network_requests',
     title: 'List network requests',
     description:
-      'List requests made since the page loaded. Off by default — restart with --network-capture if you need it (the Network domain is expensive).',
+      'List requests made since the page loaded (enables Network capture on first call if not already active).',
     params: {
       static: { type: 'boolean', description: 'Include images, fonts, scripts and other static resources (default false)' },
       filter: { type: 'string', description: 'Only return requests whose URL matches this regex' },
@@ -136,10 +136,8 @@ export const tools: ToolDef[] = [
     readOnly: true,
     async handler(args, ctx): Promise<CallResult> {
       if (!ctx.session.hasDomain('Network')) {
-        return text(
-          'Network capture is OFF. Blinkwire leaves the Network domain disabled because it slows every navigation down.\n' +
-            'Restart the server with --network-capture to enable it.',
-        );
+        await ctx.session.ensure('Network');
+        return text('Network capture enabled for future requests on this tab (re-navigate or trigger activity, then call again).');
       }
       const all = ctx.session.buffers.network.all();
       const list = filteredNetwork(all, args.static === true, args.filter as string | undefined);
@@ -166,7 +164,7 @@ export const tools: ToolDef[] = [
     readOnly: true,
     async handler(args, ctx): Promise<CallResult> {
       if (!ctx.session.hasDomain('Network')) {
-        throw new BlinkwireError('Network capture is off.', 'network_off', 'Restart with --network-capture.');
+        throw new BlinkwireError('Network capture is off.', 'network_off', 'Call browser_network_requests first or start with --network-capture.');
       }
       const all = ctx.session.buffers.network.all();
       const list = filteredNetwork(all, true, undefined);
@@ -183,7 +181,7 @@ export const tools: ToolDef[] = [
       }
       const head = `${e.method} ${e.url}\nstatus: ${e.status ?? (e.failed ? 'failed' : 'pending')}  type: ${e.type ?? '?'}  size: ${e.size ?? '?'}`;
       const want = (args.part as string | undefined) ?? 'body';
-      const out = want === 'request' ? head : want === 'response' ? `${head}\n\n${body}` : `${head}\n\n${body}`;
+      const out = want === 'request' ? head : `${head}\n\n${body}`;
       return text(ctx.budget.clamp(out), { url: e.url, status: e.status ?? null });
     },
   },
@@ -211,7 +209,8 @@ export const tools: ToolDef[] = [
       else if (typeof value === 'string') out = value;
       else {
         try {
-          out = JSON.stringify(value, null, 2) ?? String(value);
+          const pretty = JSON.stringify(value, null, 2);
+          out = (pretty && pretty.length > 400 ? JSON.stringify(value) : pretty) ?? String(value);
         } catch {
           out = String(value);
         }

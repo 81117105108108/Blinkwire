@@ -70,9 +70,22 @@ const WAIT_TEXT_FN = function (arg: any) {
  * resolves on the first idle frame instead of burning a fixed sleep.
  */
 export async function settle(session: PageSession, timeoutMs = 500, quietMs = 0): Promise<SettleReport> {
+  if (timeoutMs <= 0 || session.buffers.dialogs.length > 0) {
+    return { settled: true, ms: 0, reason: 'idle' };
+  }
   const started = Date.now();
-  const r = await session.eval<SettleReport>(SETTLE_FN, { timeoutMs, quietMs }, { timeoutMs: timeoutMs + 2000 });
-  return r ?? { settled: false, ms: Date.now() - started, reason: 'timeout-hard' };
+  try {
+    const r = await Promise.race([
+      session.eval<SettleReport>(SETTLE_FN, { timeoutMs, quietMs }, { timeoutMs: timeoutMs + 1500 }),
+      session.cdp
+        .onceFor('Page.javascriptDialogOpening', () => true, timeoutMs + 1500)
+        .then((): SettleReport => ({ settled: true, ms: Date.now() - started, reason: 'idle' })),
+    ]);
+    return r ?? { settled: false, ms: Date.now() - started, reason: 'timeout-hard' };
+  } catch {
+    // Navigation or dialog mid-settle destroys the execution context — not an error.
+    return { settled: false, ms: Date.now() - started, reason: 'timeout' };
+  }
 }
 
 export async function waitForText(

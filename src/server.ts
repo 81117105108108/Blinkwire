@@ -14,14 +14,10 @@ import { BlinkwireError, asBlinkwireError } from './core/errors.js';
 import { debug } from './core/log.js';
 
 const INSTRUCTIONS = [
-  'Blinkwire — fast CDP browser control. It attaches to a Chrome the user already runs.',
-  'RULE 1: never start a browser yourself. No shell commands, no playwright, no new Chrome.',
-  'If a call reports no browser, use browser_connect — it auto-discovers the user\'s running Chrome.',
-  'A managed browser exists only if the server was started with --launch; otherwise ask the user',
-  'to restart their Chrome with --remote-debugging-port=9222. Your job is the page, not the process.',
-  'Workflow: browser_snapshot -> act on a [ref=eN] -> browser_snapshot only when the page changed.',
-  'Prefer refs over coordinates; prefer browser_find over re-reading the whole snapshot;',
-  'use browser_batch to run several actions in ONE call (biggest latency win).',
+  "Blinkwire attaches to the user's running Chrome. Never start a browser yourself (no shell, no playwright).",
+  'No browser? Call browser_connect. Still none? Ask the user to enable chrome://inspect/#remote-debugging and click Allow.',
+  'Workflow: browser_snapshot -> act on [ref=eN] -> browser_snapshot_diff to see the effect.',
+  'Read page content with browser_snapshot mode=full; locate one thing with browser_find; chain actions with browser_batch.',
 ].join(' ');
 
 function toMcpContent(r: CallResult): Array<Record<string, unknown>> {
@@ -92,6 +88,8 @@ export async function createServer(cfg: BlinkwireConfig): Promise<{ close(): Pro
         /* ignore stale socket */
       }
       conn = await BrowserConnection.open(cfg);
+    } else if (conn.current.closed || conn.current.cdp.closed) {
+      await conn.reattach();
     }
     return conn;
   }
@@ -103,12 +101,20 @@ export async function createServer(cfg: BlinkwireConfig): Promise<{ close(): Pro
       description: t.description,
       inputSchema: toJsonSchema(t.params ?? {}),
       annotations: {
-        title: t.title,
         readOnlyHint: t.readOnly === true,
         destructiveHint: t.destructive === true,
       },
     })),
   }));
+
+  const getRefs = (s: object): RefStore => {
+    let r = refStores.get(s);
+    if (!r) {
+      r = new RefStore(s as any);
+      refStores.set(s, r);
+    }
+    return r;
+  };
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const t0 = Date.now();
@@ -128,12 +134,7 @@ export async function createServer(cfg: BlinkwireConfig): Promise<{ close(): Pro
       const args = validate(tool.params, req.params?.arguments ?? {});
       const c = await getConn();
       const session = c.current;
-      let refs = refStores.get(session);
-      if (!refs) {
-        refs = new RefStore(session);
-        refStores.set(session, refs);
-      }
-      const sessionRefs: RefStore = refs;
+      const refs = getRefs(session);
       const makeRun = (depth: number) => {
         return async (toolNameOrBase: string, rawArgs: Record<string, unknown>): Promise<CallResult> => {
           if (depth > 2) {
@@ -150,11 +151,13 @@ export async function createServer(cfg: BlinkwireConfig): Promise<{ close(): Pro
             throw new BlinkwireError(`Unknown tool "${toolNameOrBase}"`, 'unknown_tool');
           }
           const parsed = validate(targetTool.params, rawArgs ?? {});
+          const liveConn = await getConn();
+          const liveSession = liveConn.current;
           const nestedCtx: ToolContext = {
-            conn: c,
-            session,
+            conn: liveConn,
+            session: liveSession,
             cfg,
-            refs: sessionRefs,
+            refs: getRefs(liveSession),
             budget: budgets,
             toolName: (b) => cfg.prefix + b,
             run: makeRun(depth + 1),

@@ -56,6 +56,18 @@ export function fnv1a(s: string): string {
  * typically 60-80% fewer tokens than a full accessibility dump.
  */
 export async function takeSnapshot(session: PageSession, opts: SnapshotOpts = {}): Promise<SnapshotResult> {
+  const dlg = session.buffers.dialogs[0];
+  if (dlg) {
+    const text = `# (dialog open)\n- dialog [${dlg.type}] ${JSON.stringify(dlg.message)}${dlg.defaultPrompt ? ` [default=${JSON.stringify(dlg.defaultPrompt)}]` : ''} — call browser_handle_dialog first`;
+    return {
+      text,
+      hash: fnv1a(text),
+      stats: { nodes: 1, refs: 0, truncated: false, ms: 0 },
+      entries: [],
+      url: '',
+      title: '',
+    };
+  }
   await ensureInjected(session);
   const t0 = Date.now();
   const r = await session.eval<InpageResult>(

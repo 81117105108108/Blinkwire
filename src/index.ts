@@ -47,7 +47,6 @@ function printHelp(): void {
 /** One-shot diagnostic: prove a browser is reachable, say exactly which one, exit. */
 async function runCheck(): Promise<void> {
   const cfg = parseConfig(process.argv.slice(2).filter((a) => a !== '--check'));
-  const { discoverVerbose } = await import('./cdp/discovery.js');
   try {
     const conn = await BrowserConnection.open(cfg);
     try {
@@ -59,18 +58,9 @@ async function runCheck(): Promise<void> {
       await conn.close();
     }
   } catch (e) {
-    // Attach failed — show every endpoint tried so the fix is obvious.
-    const v = await discoverVerbose({
-      host: cfg.host,
-      port: cfg.port,
-      userDataDir: cfg.userDataDir,
-      timeoutMs: 1500,
-    }).catch(() => ({ tried: [] as Array<{ endpoint: string; source: string; ok: boolean; detail?: string }> }));
-    const lines = v.tried.map(
-      (t) => `  ${t.ok ? 'OK  ' : 'FAIL'} ${t.endpoint} [${t.source}]${t.detail ? ` — ${t.detail}` : ''}`,
-    );
+    const be = asBlinkwireError(e);
     process.stderr.write(
-      `${e instanceof Error ? e.message : String(e)}\nProbed:\n${lines.join('\n') || '  (nothing reachable)'}\nFix: fully quit Chrome, restart once with --remote-debugging-port=9222, then blinkwire --check.\n`,
+      `${be.message}${be.hint ? `\n${be.hint}` : ''}\nFix: in Chrome open chrome://inspect/#remote-debugging, enable it, rerun blinkwire --check and click Allow.\n`,
     );
     process.exitCode = 1;
   }
@@ -117,6 +107,9 @@ async function main(): Promise<void> {
   process.on('uncaughtException', (error) => {
     warn(error instanceof Error ? error.message : String(error));
     void shutdown().finally(() => process.exit(1));
+  });
+  process.on('unhandledRejection', (reason) => {
+    warn('unhandled rejection:', reason instanceof Error ? reason.message : String(reason));
   });
 }
 

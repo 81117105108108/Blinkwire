@@ -105,7 +105,6 @@ export class PageSession {
   private readonly enabling = new Map<Domain, Promise<void>>();
   private bootPromise: Promise<void>;
   private netIndex = new Map<string, NetworkEntry>();
-  private rootCache: { navSeq: number; nodeId: number } | undefined;
   private _closed = false;
   private _url = '';
   private _title = '';
@@ -121,7 +120,9 @@ export class PageSession {
 
   private async enableBoot(): Promise<void> {
     try {
-      await Promise.all([this.ensure('Runtime'), this.ensure('Page')]);
+      const domains: Domain[] = ['Runtime', 'Page'];
+      if (this.conn.cfg.networkCapture) domains.push('Network');
+      await this.ensure(...domains);
     } catch (e) {
       debug('boot enable failed', e);
     }
@@ -171,6 +172,9 @@ export class PageSession {
       this._url = p.frame.url ?? '';
       this.buffers.navSeq++;
       this.netIndex.clear();
+    });
+    this.cdp.on('Page.navigatedWithinDocument', (p: any) => {
+      if (p?.url) this._url = p.url;
     });
     this.cdp.on('Page.javascriptDialogOpening', (p: any) => {
       this.buffers.dialogs.push({
@@ -303,29 +307,20 @@ export class PageSession {
     return res?.result?.value as R;
   }
 
-  async queryObjectId(selector: string, _opts?: { rootObjectId?: string }): Promise<string> {
-    const navSeq = this.buffers.navSeq;
-    let rootNodeId = this.rootCache?.navSeq === navSeq ? this.rootCache.nodeId : undefined;
-    if (rootNodeId === undefined) {
-      await this.ensure('DOM');
-      const doc = await this.cdp.send<{ root: { nodeId: number } }>('DOM.getDocument', { depth: 0, pierce: true });
-      rootNodeId = doc.root.nodeId;
-      this.rootCache = { navSeq, nodeId: rootNodeId };
-    }
-    const { nodeId } = await this.cdp.send<{ nodeId: number }>('DOM.querySelector', {
-      nodeId: rootNodeId,
-      selector,
+  async queryObjectId(selector: string): Promise<string> {
+    await this.bootPromise;
+    const r = await this.cdp.send<{ result?: { objectId?: string }; exceptionDetails?: any }>('Runtime.evaluate', {
+      expression: `document.querySelector(${JSON.stringify(selector)})`,
+      returnByValue: false,
     });
-    if (!nodeId) {
+    if (r.exceptionDetails || !r.result?.objectId) {
       throw new BlinkwireError(
         `No element matches selector ${JSON.stringify(selector)}.`,
         'no_element',
         'Take a fresh browser_snapshot and use a ref like "e4", or fix the selector.',
       );
     }
-    const { object } = await this.cdp.send<{ object: { objectId?: string } }>('DOM.resolveNode', { nodeId });
-    if (!object?.objectId) throw new BlinkwireError(`Could not resolve ${selector} to an object.`, 'no_element');
-    return object.objectId;
+    return r.result.objectId;
   }
 
   async url(): Promise<string> {

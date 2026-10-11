@@ -11,18 +11,24 @@ interface Pending {
   reject: (e: Error) => void;
   timer: NodeJS.Timeout;
   method: string;
+  sessionId?: string;
 }
 
 type Listener = (params: any) => void;
 
 /** A CDP endpoint. `sessionId` scopes the view to one flattened target. */
 export class CdpSession {
+  private _closed = false;
+
   constructor(
     private readonly owner: CdpConnection,
     readonly sessionId?: string,
   ) {}
 
   send<T = any>(method: string, params?: Record<string, unknown>, opts?: SendOpts): Promise<T> {
+    if (this._closed) {
+      return Promise.reject(new BlinkwireError(`CDP session is closed (sending ${method}).`, 'cdp_closed'));
+    }
     return this.owner.send<T>(method, params, {
       timeoutMs: opts?.timeoutMs,
       sessionId: opts?.sessionId ?? this.sessionId,
@@ -48,8 +54,12 @@ export class CdpSession {
     });
   }
 
+  markClosed(): void {
+    this._closed = true;
+  }
+
   get closed(): boolean {
-    return this.owner.closed;
+    return this._closed || this.owner.closed;
   }
 }
 
@@ -75,7 +85,7 @@ export class CdpConnection {
         reject(
           new TimeoutError(
             `Could not reach ${wsUrl} within ${timeoutMs}ms.`,
-            'Start Chrome with --remote-debugging-port=9222, or run blinkwire with --launch.',
+            'Enable chrome://inspect/#remote-debugging and click Allow, or run blinkwire with --launch.',
           ),
         );
         try { ws.terminate(); } catch { /* ignore */ }
@@ -132,6 +142,21 @@ export class CdpConnection {
       return;
     }
     if (msg.method) {
+      if (msg.method === 'Target.detachedFromTarget' && msg.params?.sessionId) {
+        const sid = String(msg.params.sessionId);
+        this.sessions.get(sid)?.markClosed();
+        this.sessions.delete(sid);
+        for (const [id, p] of this.pending) {
+          if (p.sessionId === sid) {
+            clearTimeout(p.timer);
+            this.pending.delete(id);
+            p.reject(new BlinkwireError(`Target detached while awaiting ${p.method}.`, 'cdp_closed'));
+          }
+        }
+        for (const set of this.listeners.values()) {
+          for (const l of set) if (l.sessionId === sid) set.delete(l);
+        }
+      }
       const set = this.listeners.get(msg.method);
       if (!set) return;
       for (const l of set) {
@@ -158,7 +183,13 @@ export class CdpConnection {
         this.pending.delete(id);
         reject(new TimeoutError(`CDP ${method} timed out after ${timeoutMs}ms.`));
       }, timeoutMs);
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer, method });
+      this.pending.set(id, {
+        resolve: resolve as (v: unknown) => void,
+        reject,
+        timer,
+        method,
+        sessionId: opts?.sessionId,
+      });
       try {
         this.ws.send(JSON.stringify({ id, method, params: params ?? {}, ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) }));
       } catch (e) {

@@ -7,7 +7,7 @@ import { PageSession } from './session.js';
 import { BlinkwireError } from '../core/errors.js';
 import { debug, sleep, warn } from '../core/log.js';
 import { httpBase, type BlinkwireConfig } from '../config.js';
-import { discoverVerbose, findFreePort, type Discovered, type ProbeAttempt } from './discovery.js';
+import { discoverVerbose, findFreePort, probeWithDetail, type Discovered, type ProbeAttempt } from './discovery.js';
 
 export interface TargetInfo {
   id: string;
@@ -29,12 +29,13 @@ const HINT =
   "Blinkwire could not find a Chrome with DevTools enabled. It attaches to the user's running Chrome " +
   'and never starts one of its own unless blinkwire was run with --launch.\n' +
   'Do NOT start a browser yourself — call browser_connect instead (it auto-discovers).\n' +
-  "If the user's own Chrome is running but invisible to tools, tell the user this exact fix: " +
-  'fully quit Chrome first (a lingering background process can hold the port without serving DevTools), ' +
-  'then restart it once with --remote-debugging-port=9222. Chrome only reads that flag at startup, ' +
-  'so nothing else — no relaunch, no new tab, no extension — can expose an already-running session.';
+  "To expose the user's own Chrome, tell the user this exact fix: open chrome://inspect/#remote-debugging, " +
+  'enable remote debugging there, then retry and click Allow on the Chrome prompt (Chrome 144+). ' +
+  'Note: since Chrome 136, --remote-debugging-port is ignored for the default profile; it only works with a ' +
+  'separate --user-data-dir.';
 
-// Managed-launch temp profiles must not survive Ctrl+C / crash.
+// Managed-launch temp profiles must not survive a crash. index.ts owns signals and
+// calls process.exit(), which still fires this hook.
 const tempProfileDirs = new Set<string>();
 
 function cleanupTempProfiles(): void {
@@ -49,41 +50,34 @@ function cleanupTempProfiles(): void {
 }
 
 process.once('exit', cleanupTempProfiles);
-process.once('SIGINT', () => {
-  cleanupTempProfiles();
-  process.exit(130);
-});
-process.once('SIGTERM', () => {
-  cleanupTempProfiles();
-  process.exit(143);
-});
-process.once('uncaughtException', (error) => {
-  cleanupTempProfiles();
-  console.error(error);
-  process.exit(1);
-});
 
 function findExecutable(explicit?: string): string {
   if (explicit) return explicit;
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
+  const local = process.env.LOCALAPPDATA ?? '';
   const candidates: string[] =
     process.platform === 'win32'
       ? [
           'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
           'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+          path.join(local, 'Google\\Chrome\\Application\\chrome.exe'),
           'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
           'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+          path.join(local, 'Microsoft\\Edge\\Application\\msedge.exe'),
+          'C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe',
+          path.join(local, 'BraveSoftware\\Brave-Browser\\Application\\brave.exe'),
         ]
       : process.platform === 'darwin'
         ? [
             '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
             '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+            '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
             '/Applications/Chromium.app/Contents/MacOS/Chromium',
           ]
-        : ['google-chrome', 'chromium', 'chromium-browser', 'microsoft-edge'];
+        : ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'microsoft-edge', 'brave-browser'];
   for (const c of candidates) {
     try {
-      if (fs.existsSync(c)) return c;
+      if (c && fs.existsSync(c)) return c;
     } catch {
       /* keep looking */
     }
@@ -132,9 +126,12 @@ export class BrowserConnection {
     let version: VersionInfo | undefined;
 
     if (this.cfg.cdpEndpoint) {
-      // Explicit endpoint wins; it must validate as real DevTools.
+      // Explicit endpoint wins; it must validate as real DevTools. A ws:// URL is taken as-is
+      // (the WS-only remote-debugging toggle has no HTTP discovery to validate against).
       this.httpEndpoint = this.cfg.cdpEndpoint.replace(/\/+$/, '');
-      version = await this.tryVersion();
+      version = /^wss?:/i.test(this.httpEndpoint)
+        ? { Browser: 'Chrome (ws endpoint)', webSocketDebuggerUrl: this.httpEndpoint }
+        : await this.tryVersion();
       if (version) {
         found = {
           endpoint: this.httpEndpoint,
@@ -180,8 +177,8 @@ export class BrowserConnection {
         debug(`no debuggable Chrome found — started a managed one on :${port}`);
         warn(
           `No Chrome with DevTools was found, so --launch started a managed one on :${port}. ` +
-            `This is a separate browser, not your session. To use your own tabs, quit Chrome fully and ` +
-            `restart it once with --remote-debugging-port=9222, then reconnect without --launch.`,
+            `This is a separate browser, not your session. To use your own tabs, enable chrome://inspect/#remote-debugging ` +
+            `in your Chrome and reconnect without --launch.`,
         );
       }
     }
@@ -202,11 +199,33 @@ export class BrowserConnection {
         this.cfg.timeoutNavigation,
       );
       this._browser = new CdpSession(this.conn);
+      if (version.Browser.includes('(')) {
+        try {
+          const bv = await this._browser.send<{ product?: string }>('Browser.getVersion', {}, { timeoutMs: 3000 });
+          if (bv?.product) this.versionInfo.Browser = bv.product;
+        } catch {
+          /* keep placeholder */
+        }
+      }
+      // The user closes tabs. Without this the session stays "alive" and every call fails.
+      this._browser.on('Target.detachedFromTarget', (p: { targetId?: string; sessionId?: string }) => {
+        for (const [id, ps] of this.attached) {
+          if (id === p.targetId || ps.cdp.sessionId === p.sessionId) {
+            ps.markClosed();
+            this.attached.delete(id);
+          }
+        }
+      });
     }
 
     const target = await this.pickInitialTarget();
-    if (!target)
+    if (!target) {
+      if (!this.cfg.match && this._browser) {
+        await this.newTab('about:blank');
+        return;
+      }
       throw new BlinkwireError('No page target available to attach to.', 'no_target', HINT);
+    }
 
     if (this.conn && this._browser) {
       await this.attach(target.id);
@@ -225,15 +244,7 @@ export class BrowserConnection {
   }
 
   private async tryVersion(): Promise<VersionInfo | undefined> {
-    try {
-      const res = await fetch(`${this.httpEndpoint}/json/version`, {
-        signal: AbortSignal.timeout(2000),
-      });
-      if (!res.ok) return undefined;
-      return (await res.json()) as VersionInfo;
-    } catch {
-      return undefined;
-    }
+    return (await probeWithDetail(this.httpEndpoint, 2000)).version;
   }
 
   private async pollVersion(timeoutMs: number): Promise<VersionInfo | undefined> {
@@ -279,17 +290,24 @@ export class BrowserConnection {
     if (list.length === 0) return undefined;
     const m = this.cfg.match;
     if (m) {
-      const byUrl = m.url ? list.filter((t) => t.url.includes(m.url!)) : list;
-      const byTitle = m.title ? byUrl.filter((t) => t.title.includes(m.title!)) : byUrl;
-      if (typeof m.index === 'number') return byTitle[m.index] ?? byTitle[0];
+      const u = m.url?.toLowerCase();
+      const ti = m.title?.toLowerCase();
+      const byUrl = u ? list.filter((t) => t.url.toLowerCase().includes(u)) : list;
+      const byTitle = ti ? byUrl.filter((t) => t.title.toLowerCase().includes(ti)) : byUrl;
+      if (typeof m.index === 'number') return byTitle[m.index];
       return byTitle[0];
     }
-    return list[0];
+    // The user's real browser is full of chrome://, devtools:// and extension pages.
+    return list.find((t) => /^(https?|file|data):/i.test(t.url)) ?? list[0];
   }
 
-  get connRaw(): CdpConnection {
-    return this.conn;
+  /** Current tab went away but the socket is fine: pick another tab, no reconnect. */
+  async reattach(): Promise<PageSession> {
+    const t = await this.pickInitialTarget();
+    if (!t) throw new BlinkwireError('The attached tab closed and no other tab is open.', 'no_target', 'Open a tab, or use browser_tabs action=new.');
+    return this.attach(t.id);
   }
+
   /** Resolved DevTools HTTP base (post-discovery). Use for diagnostics, not httpBase(cfg). */
   get endpoint(): string {
     return this.httpEndpoint;
@@ -300,13 +318,7 @@ export class BrowserConnection {
   }
   /** False when the transport dropped (Chrome quit, WS closed) — caller must reconnect. */
   get isAlive(): boolean {
-    try {
-      if (!this.conn || this.conn.closed) return false;
-      if (this._current && (this._current.closed || this._current.cdp.closed)) return false;
-      return true;
-    } catch {
-      return false;
-    }
+    return !!this.conn && !this.conn.closed;
   }
   get browser(): CdpSession | undefined {
     return this._browser;
@@ -322,34 +334,40 @@ export class BrowserConnection {
     return this.managed;
   }
 
-  async versionInfo_(): Promise<VersionInfo> {
-    return this.versionInfo;
-  }
-
   async ensureBrowser(): Promise<CdpSession> {
     if (!this._browser) {
       throw new BlinkwireError(
         'Browser-level CDP is unavailable (attached directly to a page target).',
         'browser_domain',
-        'Window resizing needs the browser target. Restart Chrome with --remote-debugging-port and use --cdp-endpoint.',
+        'Window resizing needs the browser target. Enable chrome://inspect/#remote-debugging or use --cdp-endpoint.',
       );
     }
     return this._browser;
+  }
+
+  private readonly targetOrder = new Map<string, number>();
+
+  private orderTargets(list: TargetInfo[], type?: string): TargetInfo[] {
+    for (const t of list) if (!this.targetOrder.has(t.id)) this.targetOrder.set(t.id, this.targetOrder.size);
+    return list
+      .filter((t) => !type || t.type === type)
+      .sort((a, b) => (this.targetOrder.get(a.id) ?? 0) - (this.targetOrder.get(b.id) ?? 0));
   }
 
   async targets(type?: string): Promise<TargetInfo[]> {
     if (this._browser) {
       try {
         const r = await this._browser.send<{ targetInfos: any[] }>('Target.getTargets');
-        return (r.targetInfos ?? [])
-          .filter((t) => !type || t.type === type)
-          .map((t) => ({
+        return this.orderTargets(
+          (r.targetInfos ?? []).map((t) => ({
             id: t.targetId,
             type: t.type,
             title: t.title ?? '',
             url: t.url ?? '',
             attached: t.attached ?? false,
-          }));
+          })),
+          type,
+        );
       } catch {
         /* fall through to HTTP */
       }
@@ -359,16 +377,17 @@ export class BrowserConnection {
         signal: AbortSignal.timeout(3000),
       });
       const json = (await res.json()) as any[];
-      return json
-        .filter((t) => !type || t.type === type)
-        .map((t) => ({
+      return this.orderTargets(
+        json.map((t) => ({
           id: t.id,
           type: t.type,
           title: t.title ?? '',
           url: t.url ?? '',
           webSocketDebuggerUrl: t.webSocketDebuggerUrl,
           attached: !!t.attached,
-        }));
+        })),
+        type,
+      );
     } catch (e) {
       throw new BlinkwireError(
         `Could not list targets: ${(e as Error).message}`,
@@ -437,6 +456,7 @@ export class BrowserConnection {
   }
 
   async closeTab(targetId: string): Promise<void> {
+    const wasCurrent = this._current?.targetId === targetId;
     const cached = this.attached.get(targetId);
     if (cached) {
       cached.markClosed();
@@ -451,15 +471,23 @@ export class BrowserConnection {
     } catch {
       /* already gone */
     }
+    if (wasCurrent) {
+      await this.reattach().catch(() => {});
+    }
   }
 
   async select(m: { url?: string; title?: string; index?: number }): Promise<PageSession> {
     const list = await this.targets('page');
     let pool = list;
-    if (m.url) pool = pool.filter((t) => t.url.includes(m.url!));
-    if (m.title) pool = pool.filter((t) => t.title.includes(m.title!));
-    if (typeof m.index === 'number') pool = [pool[m.index] ?? pool[0]!];
-    const t = pool[0];
+    if (m.url) {
+      const q = m.url.toLowerCase();
+      pool = pool.filter((t) => t.url.toLowerCase().includes(q));
+    }
+    if (m.title) {
+      const q = m.title.toLowerCase();
+      pool = pool.filter((t) => t.title.toLowerCase().includes(q));
+    }
+    const t = typeof m.index === 'number' ? pool[m.index] : pool[0];
     if (!t) throw new BlinkwireError('No tab matches the given selector.', 'no_target');
     const ps = await this.attach(t.id);
     try {

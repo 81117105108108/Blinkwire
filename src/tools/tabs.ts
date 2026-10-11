@@ -30,6 +30,7 @@ const tools: ToolDef[] = [
       action: { type: 'string', enum: ['list', 'new', 'close', 'select'], description: 'Operation to perform', required: true },
       index: { type: 'integer', description: 'Tab index, used for close/select. If omitted for close, the current tab is closed.' },
       url: { type: 'string', description: 'URL to open in the new tab (action=new), or a URL substring to match (action=select).' },
+      title: { type: 'string', description: 'Title substring to match (action=select).' },
     },
     async handler(args, ctx): Promise<CallResult> {
       const action = args.action as string;
@@ -57,6 +58,7 @@ const tools: ToolDef[] = [
       }
       const ps = await ctx.conn.select({
         url: args.url as string | undefined,
+        title: args.title as string | undefined,
         index: typeof args.index === 'number' ? (args.index as number) : undefined,
       });
       return text(`Selected tab ${await ps.url()}`, { targetId: ps.targetId });
@@ -142,26 +144,19 @@ const tools: ToolDef[] = [
     name: 'install',
     title: 'Show CDP setup instructions',
     description:
-      'Nothing to install — Blinkwire attaches to a Chrome you already run. IMPORTANT: never start a browser yourself. If no browser is visible, call browser_connect (it auto-discovers); the server starts a managed one on its own as a last resort.',
+      'Nothing to install — Blinkwire attaches to a Chrome you already run. Never start a browser yourself; call browser_connect to auto-discover.',
     readOnly: true,
     async handler(): Promise<CallResult> {
       return text(
         [
-          'Blinkwire does not download or install a browser — it attaches over CDP.',
+          'Blinkwire attaches over CDP to your running Chrome.',
           '',
-          'You do not start Chrome. Blinkwire finds it: configured port, then any debuggable',
-          'instance in the running profiles, then a port sweep. It starts a managed browser only',
-          'when blinkwire itself was run with --launch — never otherwise.',
+          '1. In your running Chrome, open: chrome://inspect/#remote-debugging',
+          '2. Enable remote debugging on that page.',
+          '3. Call browser_connect (or run blinkwire --check) and click Allow on the Chrome prompt.',
           '',
-          'If the user wants their OWN daily Chrome to be visible, they must restart it once with:',
-          '  Windows: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9222',
-          '  macOS:   /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222',
-          '  Linux:   google-chrome --remote-debugging-port=9222',
-          'Chrome only reads that flag at startup; asking you to type or run it achieves nothing.',
-          '',
-          'Verify with:  blinkwire --check',
-          '',
-          'Note: Chrome ignores --remote-debugging-port if an instance with the same --user-data-dir is already running.',
+          'Note: since Chrome 136, --remote-debugging-port=9222 is ignored on the default profile',
+          'and only works when paired with a separate --user-data-dir.',
         ].join('\n'),
       );
     },

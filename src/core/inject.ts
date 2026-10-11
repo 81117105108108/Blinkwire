@@ -6,13 +6,13 @@ import type { PageSession } from '../cdp/session.js';
  * Serialised and evaluated as a plain string — keep it ES5-safe and self-contained.
  */
 export const INJECT_SRC = `function(){
-  if (window.__bw && window.__bw.v === 1) return 'ok';
+  if (window.__bw && window.__bw.box) return 'ok';
   function clamp(v, lo, hi){ return v < lo ? lo : (v > hi ? hi : v); }
   window.__bw = {
     v: 1,
-    els: {},
+    els: (window.__bw && window.__bw.els) || {},
     box: function(el, scroll){
-      if (!el) return null;
+      if (!el || el.isConnected === false) return null;
       if (scroll !== false) { try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); } catch(e){} }
       var r = el.getBoundingClientRect();
       var cs = getComputedStyle(el);
@@ -27,7 +27,7 @@ export const INJECT_SRC = `function(){
         scrolled: scroll !== false
       };
     },
-    focus: function(el){ if (!el) return false; try { el.focus({ preventScroll: false }); } catch(e){ try { el.focus(); } catch(e2){} } return document.activeElement === el; },
+    focus: function(el){ if (!el || el.isConnected === false) return false; try { el.focus({ preventScroll: false }); } catch(e){ try { el.focus(); } catch(e2){} } return document.activeElement === el; },
     scroll: function(el, dx, dy){
       var t = el || document.scrollingElement || document.documentElement;
       var before = { x: t.scrollLeft, y: t.scrollTop };
@@ -44,9 +44,9 @@ export const INJECT_SRC = `function(){
   return 'ok';
 }`;
 
-/** 1-RTT element lookup by ref id. Returns a live objectId for Runtime.callFunctionOn. */
+/** 1-RTT element lookup by ref id. Falls back to [data-bw-ref] if React re-created the wrapper. */
 export const REF_EXPR = (id: string): string =>
-  `(function(){ var e = window.__bw && window.__bw.els[${JSON.stringify(id)}]; return e || null; })()`;
+  `(function(){ var e = (window.__bw && window.__bw.els && window.__bw.els[${JSON.stringify(id)}]) || document.querySelector('[data-bw-ref=' + ${JSON.stringify(id)} + ']'); return e && e.isConnected !== false ? e : null; })()`;
 
 const injectedAt = new WeakMap<PageSession, number>();
 

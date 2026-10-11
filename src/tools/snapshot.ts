@@ -30,15 +30,15 @@ export const tools: ToolDef[] = [
       boxes: { type: 'boolean', description: 'Include each element\'s bounding box as [box=x,y,w,h] in CSS pixels' },
       mode: {
         type: 'string',
-        enum: ['interactive', 'full', 'minimal'],
-        description: 'interactive (default) = landmarks + headings + controls; full = everything; minimal = flat list of controls',
+        enum: ['interactive', 'full', 'minimal', 'text'],
+        description: 'interactive (default) = landmarks, headings, prose & controls; full = all visible nodes; minimal = controls only; text = clean markdown/text',
       },
       filename: { type: 'string', description: 'Save the snapshot to this file instead of returning it' },
     },
     readOnly: true,
     async handler(args, ctx): Promise<CallResult> {
       const result = await takeSnapshot(ctx.session, {
-        mode: (args.mode as 'interactive' | 'full' | 'minimal' | undefined) ?? ctx.cfg.snapshotMode,
+        mode: (args.mode as 'interactive' | 'full' | 'minimal' | 'text' | undefined) ?? ctx.cfg.snapshotMode,
         depth: args.depth as number | undefined,
         boxes: (args.boxes as boolean | undefined) ?? ctx.cfg.snapshotBoxes,
         selector: args.target as string | undefined,
@@ -66,7 +66,7 @@ export const tools: ToolDef[] = [
     name: 'find',
     title: 'Find in page snapshot',
     description:
-      'Search the current snapshot for text or a regex and return matching lines with their refs. Far cheaper than re-reading the whole snapshot when you only need to locate one element.',
+      'Search the page for text or regex and return matching lines with their refs. Cheaper than reading a full snapshot.',
     params: {
       text: { type: 'string', description: 'Plain text to search for (case-insensitive substring). Provide either text or regex.' },
       regex: { type: 'string', description: 'Regular expression, e.g. "error" or "/log(in|out)/i". Provide either text or regex.' },
@@ -78,21 +78,33 @@ export const tools: ToolDef[] = [
       const re = args.regex as string | undefined;
       if (!needle && !re) throw new BlinkwireError('Provide either text or regex.', 'bad_arguments');
       const ctxLines = (args.context as number | undefined) ?? 2;
+      const rx = re ? parseRegex(re) : undefined;
+      const matchLines = (s: string): { lines: string[]; hits: number[] } => {
+        const lines = s.split('\n');
+        const hits: number[] = [];
+        for (let i = 0; i < lines.length; i++) {
+          const l = lines[i]!;
+          if (rx ? rx.test(l) : l.toLowerCase().includes(needle!.toLowerCase())) hits.push(i);
+        }
+        return { lines, hits };
+      };
 
       let result = last.get(ctx.session);
-      if (!result || result.url !== (await ctx.session.url())) {
+      const curUrl = await ctx.session.url();
+      let freshFull = false;
+      if (!result || result.url !== curUrl) {
         result = await takeSnapshot(ctx.session, { mode: 'full' });
         ctx.refs.reset(result.entries);
         last.set(ctx.session, result);
+        freshFull = true;
       }
 
-      const lines = result.text.split('\n');
-      const rx = re ? parseRegex(re) : undefined;
-      const hits: number[] = [];
-      for (let i = 0; i < lines.length; i++) {
-        const l = lines[i]!;
-        const hit = rx ? rx.test(l) : l.toLowerCase().includes(needle!.toLowerCase());
-        if (hit) hits.push(i);
+      let { lines, hits } = matchLines(result.text);
+      if (hits.length === 0 && !freshFull) {
+        result = await takeSnapshot(ctx.session, { mode: 'full' });
+        ctx.refs.reset(result.entries);
+        last.set(ctx.session, result);
+        ({ lines, hits } = matchLines(result.text));
       }
       if (hits.length === 0) {
         return text(`No matches for ${rx ? `regex ${re}` : JSON.stringify(needle)}.`);

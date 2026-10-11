@@ -106,20 +106,18 @@ export class RefStore {
     await ensureInjected(this.session);
     const id = this.check(target);
     const scroll = opts?.scroll !== false;
-    let b: Box | null;
-    if (id) {
-      b = await this.session.eval<Box | null>(
-        `(function(a){ var el = window.__bw.els[${JSON.stringify(id)}]; return window.__bw.box(el, ${scroll}); })`,
-        undefined,
-        { awaitPromise: false },
-      );
-      if (!b) throw new BlinkwireError(`Ref ${id} no longer exists in the page.`, 'stale_refs', 'Call browser_snapshot again.');
-    } else {
-      const objectId = await this.session.queryObjectId(target);
-      b = await this.session.evalOn<Box | null>(objectId, function (el: any, arg: any) {
-        return (window as any).__bw.box(el, arg.scroll);
-      }, { scroll }, { awaitPromise: false });
-      if (!b) throw new BlinkwireError(`Could not measure ${target}.`, 'no_element');
+    const expr = id
+      ? `(${REF_EXPR(id)})`
+      : `document.querySelector(${JSON.stringify(target)})`;
+    const b = await this.session.eval<Box | null>(
+      `(function(){ var el = ${expr}; return window.__bw && window.__bw.box ? window.__bw.box(el, ${scroll}) : null; })`,
+      undefined,
+      { awaitPromise: false },
+    );
+    if (!b) {
+      throw id
+        ? new BlinkwireError(`Ref ${id} no longer exists in the page.`, 'stale_refs', 'Call browser_snapshot again.')
+        : new BlinkwireError(`No element matches selector ${JSON.stringify(target)}.`, 'no_element', 'Take a fresh browser_snapshot and use a ref like "e4", or fix the selector.');
     }
     if (opts?.requireVisible !== false && !b.visible) {
       throw new BlinkwireError(
